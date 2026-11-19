@@ -1,0 +1,7 @@
+{
+  "listen": ":7443",
+  "data_dir": "data",
+  "session_ttl": "12h",
+  "sources": [],
+  "notifiers": []
+}

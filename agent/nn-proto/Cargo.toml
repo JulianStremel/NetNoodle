@@ -1,0 +1,11 @@
+[package]
+name = "nn-proto"
+description = "netnoodle v1 wire types (mirrors internal/proto and api/v1)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true

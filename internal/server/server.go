@@ -1,0 +1,209 @@
+// Package server is the HTTP side of nn-server: the web UI, the operator
+// API (/api/...) and the component protocol (/v1/...).
+package server
+
+import (
+	"encoding/json"
+	"io/fs"
+	"log/slog"
+	"mime"
+	"net/http"
+	"strings"
+	"time"
+
+	"netnoodle/internal/store"
+)
+
+// Server holds the HTTP handlers and their dependencies.
+type Server struct {
+	cfg         Config
+	st          store.Store
+	log         *slog.Logger
+	ui          fs.FS
+	fingerprint string
+	limiter     *loginLimiter
+	now         func() time.Time
+}
+
+// New creates a server. ui is the static web UI file system.
+func New(cfg Config, st store.Store, ui fs.FS, fingerprint string, log *slog.Logger) *Server {
+	return &Server{
+		cfg:         cfg,
+		st:          st,
+		log:         log,
+		ui:          ui,
+		fingerprint: fingerprint,
+		limiter:     newLoginLimiter(),
+		now:         time.Now,
+	}
+}
+
+// Handler returns the root HTTP handler.
+func (s *Server) Handler() http.Handler {
+	mux := http.NewServeMux()
+
+	// Component protocol.
+	mux.HandleFunc("GET /v1/health", s.handleHealth)
+
+	// Operator API for the web UI.
+	mux.HandleFunc("POST /api/login", s.handleLogin)
+	mux.HandleFunc("POST /api/logout", s.handleLogout)
+	mux.HandleFunc("GET /api/me", requireUser(s.handleMe))
+	mux.HandleFunc("GET /api/info", requireUser(s.handleInfo))
+	mux.HandleFunc("GET /api/events", requireUser(s.handleEvents))
+
+	// Static UI. Unknown /api/ and /v1/ paths get a JSON 404, not a page.
+	files := http.FileServerFS(s.ui)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/v1/") {
+			writeErr(w, http.StatusNotFound, "no such endpoint")
+			return
+		}
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		files.ServeHTTP(w, r)
+	})
+
+	return securityHeaders(jsonOnlyWrites(s.withUser(mux)))
+}
+
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("Strict-Transport-Security", "max-age=31536000")
+		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/v1/") {
+			h.Set("Cache-Control", "no-store")
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// jsonOnlyWrites rejects state-changing requests that are not JSON. A
+// cross-site form cannot send application/json without a CORS preflight,
+// so together with SameSite=Strict cookies this blocks CSRF.
+func jsonOnlyWrites(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet, http.MethodHead, http.MethodOptions:
+		default:
+			mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
+			if mt != "application/json" {
+				writeErr(w, http.StatusUnsupportedMediaType, "content type must be application/json")
+				return
+			}
+			r.Body = http.MaxBytesReader(w, r.Body, 64<<20)
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func writeJSON(w http.ResponseWriter, code int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(v)
+}
+
+func writeErr(w http.ResponseWriter, code int, msg string) {
+	writeJSON(w, code, map[string]string{"error": msg})
+}
+
+func readJSON(r *http.Request, v any) error {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	return dec.Decode(v)
+}
+
+func (s *Server) event(r *http.Request, typ, actor, summary string) {
+	if err := s.st.AddEvent(r.Context(), store.Event{At: s.now(), Type: typ, Actor: actor, Summary: summary}); err != nil {
+		s.log.Error("event", "err", err)
+	}
+}
+
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "protocol": "v1"})
+}
+
+func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		User     string `json:"user"`
+		Password string `json:"password"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad request")
+		return
+	}
+	ip := clientIP(r)
+	now := s.now()
+	if !s.limiter.allowed(ip, now) {
+		writeErr(w, http.StatusTooManyRequests, "too many failed logins, wait a few minutes")
+		return
+	}
+	u, ok := s.checkLogin(r.Context(), req.User, req.Password)
+	if !ok {
+		s.limiter.fail(ip, now)
+		s.event(r, "login.failed", ip, "failed login for "+truncate(req.User, 64))
+		writeErr(w, http.StatusUnauthorized, errBadLogin.Error())
+		return
+	}
+	tok := RandomToken(32)
+	exp := now.Add(s.cfg.SessionTTL.Duration)
+	if err := s.st.CreateSession(r.Context(), HashToken(tok), u.ID, exp); err != nil {
+		s.log.Error("create session", "err", err)
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	_ = s.st.PurgeSessions(r.Context(), now)
+	http.SetCookie(w, &http.Cookie{
+		Name: sessionCookie, Value: tok, Path: "/", Expires: exp,
+		HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode,
+	})
+	s.event(r, "login", u.Name, "login from "+ip)
+	writeJSON(w, http.StatusOK, map[string]string{"user": u.Name})
+}
+
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if c, err := r.Cookie(sessionCookie); err == nil {
+		_ = s.st.DeleteSession(r.Context(), HashToken(c.Value))
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name: sessionCookie, Value: "", Path: "/", MaxAge: -1,
+		HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode,
+	})
+	writeJSON(w, http.StatusOK, map[string]string{})
+}
+
+func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
+	u, _ := userFrom(r.Context())
+	writeJSON(w, http.StatusOK, map[string]string{"user": u.Name})
+}
+
+func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{
+		"protocol":        "v1",
+		"tls_fingerprint": s.fingerprint,
+	})
+}
+
+func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
+	ev, err := s.st.ListEvents(r.Context(), 200)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if ev == nil {
+		ev = []store.Event{}
+	}
+	writeJSON(w, http.StatusOK, ev)
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
+}

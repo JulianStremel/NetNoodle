@@ -1,0 +1,6 @@
+/bin/
+/data/
+/netnoodle.json
+*.db
+*.db-wal
+*.db-shm

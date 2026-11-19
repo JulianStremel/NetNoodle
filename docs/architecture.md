@@ -1,0 +1,168 @@
+# netnoodle architecture
+
+This document gives the design of netnoodle.
+It uses ASD-STE100 Simplified Technical English.
+Refer to [DECISIONS.md](DECISIONS.md) for the reasons of the decisions.
+
+## 1. Purpose
+
+netnoodle does these tasks:
+
+1. It finds the devices on the network. It uses a subnet scan and the APIs of network systems (UniFi first).
+2. It collects the software and the services of each device. A Rust agent does this with the smallest possible scope.
+3. It collects data about vulnerabilities from threat feeds.
+4. It finds the devices that have vulnerable software.
+5. It decides on an action from rules and, as an option, an LLM.
+6. It sends the action to an actor. Actions outside the automatic scope need the approval of an operator.
+
+## 2. Main rules
+
+- The server and the API programs use Go. The agent and the host actor use Rust.
+- Each part that you can replace or add has an interface and a registry. The configuration selects the parts by name.
+- The protocol between the parts is versioned JSON. The schemas are in `api/v1`.
+- The server has no code for one specific source or one specific actor. It uses only identifiers and capabilities.
+- All parts connect to the server. Agents and actors do not listen on a network port.
+- The agent only reads. Actions are done by separate actor programs.
+- The server signs each order with ed25519. An actor examines the signature, the expiry time, the nonce and its local allowlist.
+- An LLM can only make a decision safer. It cannot increase the scope of an action.
+
+## 3. Components
+
+```
+ SOURCES (any language)               nn-server (Go)                       ACTORS (any language)
+ nn-scan ──┐               ┌──────────────────────────────────┐
+ nn-agent ─┼─ POST /v1/... │ ingest → identity resolver       │
+ others ───┘ ─────────────▶│   → inventory (device tree)      │
+ in-process: unifi,        │ matchers → enrichers → findings  │   GET /v1/orders (pull)
+   proxmox ───────────────▶│ deciders → guards → planner      │◀── nn-actor (Go): unifi, proxmox
+                           │   → orders and approvals         │◀── nn-actor-host (Rust)
+                           │ notifiers · web UI · SQLite      │◀── others
+                           └──────────────────────────────────┘
+```
+
+### 3.1 nn-server
+
+- HTTPS with a self-signed certificate. The server makes the certificate on the first start. Clients pin its SHA-256 fingerprint.
+- The web interface is HTML, CSS and JavaScript. The server embeds the files. There is no build step.
+- Operators log in with a user name and a password (bcrypt). The session cookie is `HttpOnly`, `Secure` and `SameSite=Strict`.
+- The operator API accepts only JSON for write requests. This blocks cross-site requests.
+- The server keeps its data in SQLite.
+
+### 3.2 Discovery
+
+- `nn-scan` is a separate program. Thus, it can operate in each subnet. It finds hosts with ICMP and TCP connections. It reads banners, HTTP headers, TLS certificates and the local ARP table.
+- The `unifi` source operates in the server. It uses a read-only API key. It reads clients and network devices.
+- The `proxmox` source operates in the server. It uses an API token with the role `PVEAuditor`. It reads cluster nodes, virtual machines and containers.
+
+### 3.3 Agent (nn-agent)
+
+The agent has collectors. Each collector reads one type of data.
+Each collector declares the files, sockets and programs that it uses.
+The command `nn-agent scope` shows this access.
+The configuration enables the collectors.
+
+| Collector | Data | Milestone |
+|---|---|---|
+| `os` | Operating system and kernel | M2 |
+| `dpkg`, `rpm`, `apk` | Installed packages | M2 |
+| `sockets` | Listening sockets, process and package of each socket | M2 |
+| `interfaces` | Network interfaces and MAC addresses | M2 |
+| `containers` | Docker and Podman containers and their packages | M4 |
+| `lxc` | LXC containers on a hypervisor and their packages | M4 |
+| `qga` | Data from the QEMU guest agent. No commands in the guest. | M4 |
+
+The agent operates as a user without root permissions by default.
+Collectors that need more permissions are optional.
+
+### 3.4 Inventory and deduplication
+
+Each observation contains entities. Each entity has identifiers.
+An identifier has a kind, a value, and a strength.
+
+- Strong identifiers name exactly one entity. Examples: a MAC address that is not locally administered, an agent ID, a Proxmox guest ID.
+- Weak identifiers are hints. Examples: an IP address, a host name.
+
+The identity resolver uses these rules:
+
+1. If a strong identifier agrees with a device, the observation belongs to that device.
+2. If no strong identifier agrees, a weak identifier can agree. A weak identifier must not conflict with a strong identifier.
+3. If two devices have the same strong identifier, the server merges the devices.
+4. If weak identifiers conflict, the web interface shows a merge suggestion.
+
+Each device can have a parent. Example: a virtual machine has its hypervisor node as parent.
+
+### 3.5 Threat feed and matching
+
+- The `osv` matcher sends the package URL and the version to OSV. OSV compares the versions.
+- The `kev` and `epss` enrichers add the known-exploited status and the exploit probability.
+- A new report starts a match for that device. A feed update starts a match for all devices.
+- A version from a banner gives a finding with low confidence.
+
+### 3.6 Decisions
+
+| Tier | Effect |
+|---|---|
+| `notify` | The server sends a notification only. |
+| `auto` | The server sends the order automatically. The action must be reversible and must have a time limit. |
+| `approve` | An operator must approve the order. |
+
+- The `rules` decider uses an ordered list of rules. A rule examines the CVSS score, KEV, EPSS, exposure, device tags and confidence.
+- The `llm` decider is optional. It writes a summary and a proposal. The server examines the output against a schema. The LLM can only make the tier safer.
+- Guards operate last. Examples: protected devices, a limit of actions per hour, a kill switch.
+- The planner selects an actor by its capabilities. A capability has an action name and the identifier kinds that the actor can use.
+
+### 3.7 Actors
+
+- `nn-actor` has backends: `unifi` (block a client) and `proxmox` (firewall rule, suspend, stop, snapshot).
+- `nn-actor-host` stops or starts allowlisted systemd units. It adds rules to its own nftables table.
+- The server reverses an action when its time limit ends. It also reverses an action when a new report shows a fixed version.
+
+## 4. Plug-in contracts
+
+Each plug-in registers a factory in a registry (`internal/registry`).
+The configuration has entries with the format `{"type": ..., "name": ..., "settings": {...}}`.
+
+| Package | Interface | Function |
+|---|---|---|
+| `internal/source` | `Source` | Pulls observations from an API in the server. |
+| `internal/intel` | `Matcher` | Finds vulnerabilities for components. |
+| `internal/intel` | `Enricher` | Adds facts to a vulnerability. |
+| `internal/decide` | `Decider` | Proposes a tier and an action. |
+| `internal/decide` | `Guard` | Makes a proposal safer. |
+| `internal/notify` | `Notifier` | Sends events to a person. |
+| `internal/actor` | `Backend` | Executes orders in `nn-actor`. |
+| `internal/store` | `Store` | Keeps the data. SQLite is the first implementation. |
+| `agent/nn-agent` | `Collector` (Rust trait) | Collects one type of data on a host. |
+| `agent/nn-actor-host` | `Action` (Rust trait) | Executes one type of action on a host. |
+
+To add a plug-in, do these steps:
+
+1. Write a type that implements the interface.
+2. Register the type in the registry in an `init` function.
+3. Add an entry to the configuration.
+
+An external program can also be a source or an actor. It uses the JSON protocol in `api/v1`.
+
+## 5. Protocol (v1)
+
+| Message | Direction | Schema |
+|---|---|---|
+| `Observation` | Source or agent to server | `api/v1/observation.schema.json` |
+| `ActorHello` | Actor to server | `api/v1/actor.schema.json` |
+| `SignedOrder` | Server to actor | `api/v1/actor.schema.json` |
+| `OrderResult` | Actor to server | `api/v1/actor.schema.json` |
+
+The Go types are in `internal/proto`. The Rust types are in `agent/nn-proto`.
+
+## 6. Milestones
+
+| ID | Contents | Status |
+|---|---|---|
+| M0 | Skeleton: protocol, registries, server with store, TLS, login and web interface shell | Done |
+| M1 | Ingest API, identity resolver, `nn-scan`, `unifi` source, device list | Not done |
+| M2 | Agent enrollment, collectors `os`, `dpkg`, `rpm`, `apk`, `sockets`, `interfaces` | Not done |
+| M3 | OSV, KEV and EPSS, findings page | Not done |
+| M4 | `proxmox` source, collectors `containers`, `lxc`, `qga`, device tree | Not done |
+| M5 | `rules` decider, guards, approval queue, webhook notifier | Not done |
+| M6 | Actor protocol, signed orders, `nn-actor`, `nn-actor-host`, time limits | Not done |
+| M7 | `llm` decider | Not done |

@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "netnoodle/v1/actor",
+  "title": "Actor protocol",
+  "description": "Messages between the server and an actor. An actor sends ActorHello, pulls SignedOrder items from GET /v1/orders, and sends OrderResult.",
+  "$defs": {
+    "identifier": { "$ref": "observation.schema.json#/$defs/identifier" },
+    "capability": {
+      "type": "object",
+      "required": ["action", "target_id_kinds", "reversible"],
+      "additionalProperties": false,
+      "properties": {
+        "action": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$" },
+        "target_id_kinds": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+        "params_schema": { "type": "object" },
+        "reversible": { "type": "boolean" },
+        "revert_action": { "type": "string" }
+      }
+    },
+    "actor_hello": {
+      "type": "object",
+      "required": ["version", "actor", "capabilities"],
+      "additionalProperties": false,
+      "properties": {
+        "version": { "const": "v1" },
+        "actor": { "type": "string" },
+        "capabilities": { "type": "array", "items": { "$ref": "#/$defs/capability" } }
+      }
+    },
+    "order": {
+      "type": "object",
+      "required": ["version", "id", "actor", "action", "targets", "not_after", "nonce"],
+      "additionalProperties": false,
+      "properties": {
+        "version": { "const": "v1" },
+        "id": { "type": "string" },
+        "actor": { "type": "string" },
+        "action": { "type": "string" },
+        "targets": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/identifier" } },
+        "params": { "type": "object" },
+        "ttl_seconds": { "type": "integer", "minimum": 0 },
+        "revert": { "type": "boolean" },
+        "revert_of": { "type": "string" },
+        "not_after": { "type": "string", "format": "date-time" },
+        "nonce": { "type": "string" },
+        "meta": { "type": "object", "additionalProperties": { "type": "string" } }
+      }
+    },
+    "signed_order": {
+      "type": "object",
+      "required": ["payload", "signature", "key_id"],
+      "additionalProperties": false,
+      "properties": {
+        "payload": { "type": "string", "contentEncoding": "base64", "description": "JSON of an order. The signature covers these exact bytes." },
+        "signature": { "type": "string", "contentEncoding": "base64", "description": "ed25519 signature over payload." },
+        "key_id": { "type": "string" }
+      }
+    },
+    "order_result": {
+      "type": "object",
+      "required": ["version", "order_id", "status", "at"],
+      "additionalProperties": false,
+      "properties": {
+        "version": { "const": "v1" },
+        "order_id": { "type": "string" },
+        "status": { "enum": ["done", "failed", "rejected"] },
+        "message": { "type": "string" },
+        "at": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

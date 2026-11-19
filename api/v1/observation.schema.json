@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "netnoodle/v1/observation",
+  "title": "Observation",
+  "description": "Data that a source (scanner, API importer, agent, third-party program) sends to POST /v1/observations.",
+  "type": "object",
+  "required": ["version", "source", "observed_at", "entities"],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "const": "v1" },
+    "source": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "observed_at": { "type": "string", "format": "date-time" },
+    "complete": { "type": "boolean", "description": "True if each entity is reported in full (agent). Missing components were removed." },
+    "entities": { "type": "array", "maxItems": 100000, "items": { "$ref": "#/$defs/entity" } }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "object",
+      "required": ["kind", "value", "strength"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$" },
+        "value": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "strength": { "enum": ["strong", "weak"] }
+      }
+    },
+    "component": {
+      "type": "object",
+      "required": ["purl", "name", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "purl": { "type": "string", "pattern": "^pkg:" },
+        "name": { "type": "string" },
+        "version": { "type": "string" },
+        "confidence": { "enum": ["high", "low"] }
+      }
+    },
+    "service": {
+      "type": "object",
+      "required": ["port", "proto"],
+      "additionalProperties": false,
+      "properties": {
+        "port": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "proto": { "enum": ["tcp", "udp"] },
+        "address": { "type": "string" },
+        "product": { "type": "string" },
+        "version": { "type": "string" },
+        "process": { "type": "string" },
+        "component": { "type": "string" },
+        "banner": { "type": "string", "maxLength": 1024 },
+        "confidence": { "enum": ["high", "low"] }
+      }
+    },
+    "interface": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "mac": { "type": "string" },
+        "ips": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "entity": {
+      "type": "object",
+      "required": ["kind", "identifiers"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "enum": ["host", "vm", "container", "network-device", "unknown"] },
+        "identifiers": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/identifier" } },
+        "name": { "type": "string" },
+        "attributes": { "type": "object", "additionalProperties": { "type": "string" } },
+        "components": { "type": "array", "items": { "$ref": "#/$defs/component" } },
+        "services": { "type": "array", "items": { "$ref": "#/$defs/service" } },
+        "interfaces": { "type": "array", "items": { "$ref": "#/$defs/interface" } },
+        "parent": { "type": "array", "items": { "$ref": "#/$defs/identifier" } },
+        "children": { "type": "array", "items": { "$ref": "#/$defs/entity" } }
+      }
+    }
+  }
+}
