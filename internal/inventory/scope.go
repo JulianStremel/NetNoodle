@@ -49,6 +49,14 @@ func StripAgentIDs(es []proto.Entity) {
 	}
 }
 
+// agentKinds are the identifier kinds an agent may report about its host.
+// Other kinds (for example proxmox.guest) belong to other sources; an
+// agent could otherwise pre-claim them and capture a later import.
+var agentKinds = map[string]bool{"mac": true, "ip": true, "hostname": true}
+
+// movableByAgent are the kinds an agent report may move from another device.
+var movableByAgent = map[string]bool{"ip": true, "hostname": true}
+
 // ErrAgentShape is returned for agent reports that break the agent rules.
 var ErrAgentShape = errors.New("an agent must send exactly one top-level entity without children or parent")
 
@@ -66,7 +74,12 @@ func PrepareAgent(obs *proto.Observation, name string) error {
 		return ErrAgentShape
 	}
 	NormalizeEntity(e)
-	ids := withoutAgentIDs(e.Identifiers)
+	var ids []proto.Identifier
+	for _, id := range e.Identifiers {
+		if agentKinds[id.Kind] {
+			ids = append(ids, id)
+		}
+	}
 	if len(ids) >= maxIdentifiers {
 		ids = ids[:maxIdentifiers-1]
 	}

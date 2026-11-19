@@ -51,6 +51,8 @@ func (s *Server) requirePeer(next http.HandlerFunc, roles ...string) http.Handle
 	}
 }
 
+var errReserved = errors.New("reserved name")
+
 // handleEnroll exchanges a join token for a peer token.
 func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -75,8 +77,19 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tok := RandomToken(32)
-	p, err := s.st.Enroll(r.Context(), HashToken(req.JoinToken), req.Name, HashToken(tok), now)
+	// The effective name can come from the token; check it in the
+	// enrollment transaction.
+	allow := func(name string) error {
+		if s.reserved[strings.ToLower(name)] {
+			return errReserved
+		}
+		return nil
+	}
+	p, err := s.st.Enroll(r.Context(), HashToken(req.JoinToken), req.Name, HashToken(tok), now, allow)
 	switch {
+	case errors.Is(err, errReserved):
+		writeErr(w, http.StatusConflict, "this name is reserved")
+		return
 	case errors.Is(err, store.ErrNotFound):
 		writeErr(w, http.StatusUnauthorized, "invalid or expired join token")
 		return

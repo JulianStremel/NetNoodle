@@ -213,6 +213,9 @@ func (m *Matcher) Match(ctx context.Context, comps []proto.Component) ([]intel.H
 	if len(items) == 0 {
 		return nil, nil
 	}
+	if len(uniq) > maxMatchQueries {
+		return nil, fmt.Errorf("osv: %d distinct packages, more than %d per device", len(uniq), maxMatchQueries)
+	}
 	ids, err := m.lookup(ctx, uniq)
 	if err != nil {
 		return nil, err
@@ -334,6 +337,7 @@ func (m *Matcher) lookup(ctx context.Context, uniq map[Query]bool) (map[Query][]
 			out[q] = res[i]
 			m.queries[q] = queryEntry{ids: res[i], at: now}
 		}
+		m.pruneLocked(now)
 		m.mu.Unlock()
 	}
 	return out, nil
@@ -389,6 +393,9 @@ func (m *Matcher) batch(ctx context.Context, qs []Query, tokens []string) ([][]i
 const (
 	maxCachedQueries = 200000
 	maxCachedVulns   = 100000
+	// maxMatchQueries bounds the work of one device match. Real hosts have
+	// a few thousand packages.
+	maxMatchQueries = 50000
 )
 
 func (m *Matcher) pruneLocked(now time.Time) {
@@ -484,6 +491,9 @@ func (m *Matcher) fetch(ctx context.Context, ids []string, now time.Time) error 
 				}
 				m.mu.Lock()
 				m.vulns[id] = vulnEntry{rec: rec, at: now, notFound: rec == nil}
+				if len(m.vulns) > maxCachedVulns {
+					m.pruneLocked(now)
+				}
 				m.mu.Unlock()
 			}
 		}()

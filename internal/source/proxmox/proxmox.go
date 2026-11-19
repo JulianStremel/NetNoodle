@@ -2,9 +2,11 @@
 // cluster nodes, virtual machines and containers with a read-only API token
 // (role PVEAuditor) and reports each node with its guests as children.
 //
-// Identity: a node is "proxmox.node=<cluster>/<node>", a guest is
-// "proxmox.guest=<cluster>/<vmid>" (VM IDs are unique in a cluster, and a
-// migrated guest keeps its identity). Guest MAC addresses come from the
+// Identity: a node is "proxmox.node=<source>/<cluster>/<node>", a guest is
+// "proxmox.guest=<source>/<cluster>/<vmid>" (VM IDs are unique in a
+// cluster, and a migrated guest keeps its identity). The configured source
+// name is part of the value, so two clusters with the same name (for
+// example the default) cannot collide. Guest MAC addresses come from the
 // guest config; Proxmox MACs (BC:24:11:...) are globally unique, so guests
 // merge with the same machine seen by an agent, a scan or UniFi.
 package proxmox
@@ -97,6 +99,24 @@ func New(name string, raw json.RawMessage) (source.Source, error) {
 
 // Name returns the instance name.
 func (p *Source) Name() string { return p.name }
+
+// Limits against a broken or hostile API: the source keeps only short,
+// bounded data per guest until the poll ends.
+const (
+	maxGuests     = 10000
+	maxNodes      = 1000
+	maxIfaces     = 32
+	maxIPsPerNIC  = 64
+	maxFieldBytes = 256
+)
+
+// short cuts a string from the API to maxFieldBytes.
+func short(s string) string {
+	if len(s) > maxFieldBytes {
+		return strings.ToValidUTF8(s[:maxFieldBytes], "")
+	}
+	return s
+}
 
 // errStatus is an HTTP error from the API.
 type errStatus struct {
@@ -214,11 +234,18 @@ func (p *Source) Poll(ctx context.Context, emit func(proto.Observation) error) e
 		}
 	}
 	if cluster == "" {
-		cluster = p.name // a single node without a cluster
+		cluster = "standalone"
+	}
+	cluster = p.name + "/" + short(cluster)
+	if len(nodes) > maxNodes {
+		return fmt.Errorf("proxmox: %d nodes, more than %d", len(nodes), maxNodes)
 	}
 	var res []resource
 	if err := p.get(ctx, "/cluster/resources?type=vm", &res); err != nil {
 		return err
+	}
+	if len(res) > maxGuests {
+		return fmt.Errorf("proxmox: %d guests, more than %d", len(res), maxGuests)
 	}
 
 	guests := map[string][]proto.Entity{}
@@ -246,6 +273,7 @@ func (p *Source) Poll(ctx context.Context, emit func(proto.Observation) error) e
 
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Name < nodes[j].Name })
 	for _, n := range nodes {
+		n.Name = short(n.Name)
 		e := proto.Entity{
 			Kind: proto.KindHost,
 			Name: n.Name,
@@ -267,6 +295,7 @@ func (p *Source) Poll(ctx context.Context, emit func(proto.Observation) error) e
 				Release string `json:"release"`
 			}
 			if err := p.get(ctx, "/nodes/"+url.PathEscape(n.Name)+"/version", &ver); err == nil && ver.Version != "" {
+				ver.Version = short(ver.Version)
 				e.Attributes["pve.version"] = ver.Version
 				e.Components = append(e.Components, proto.Component{
 					PURL: "pkg:generic/proxmox/pve-manager@" + url.PathEscape(ver.Version), Name: "pve-manager", Version: ver.Version, Confidence: proto.High,
@@ -290,6 +319,7 @@ func (p *Source) guest(ctx context.Context, cluster string, r resource) proto.En
 		kind = proto.KindContainer
 	}
 	vmid := strconv.Itoa(r.VMID)
+	r.Name, r.Tags, r.Status, r.Node = short(r.Name), short(r.Tags), short(r.Status), short(r.Node)
 	e := proto.Entity{
 		Kind: kind,
 		Name: r.Name,
@@ -319,12 +349,16 @@ func (p *Source) guest(ctx context.Context, cluster string, r resource) proto.En
 		return e
 	}
 	if v, ok := cfg["ostype"].(string); ok {
-		e.Attributes["proxmox.ostype"] = v
+		e.Attributes["proxmox.ostype"] = short(v)
 	}
 	byMAC := map[string]*proto.Interface{}
-	for _, k := range netKeys(cfg) {
+	keys := netKeys(cfg)
+	if len(keys) > maxIfaces {
+		keys = keys[:maxIfaces]
+	}
+	for _, k := range keys {
 		v, _ := cfg[k].(string)
-		gi := parseNet(k, v)
+		gi := parseNet(k, short(v))
 		e.Interfaces = append(e.Interfaces, proto.Interface{Name: gi.Name, MAC: gi.MAC, IPs: gi.IPs})
 	}
 	for i := range e.Interfaces {
@@ -393,18 +427,21 @@ func (p *Source) guestAgent(ctx context.Context, base string, byMAC map[string]*
 	}
 	if err := p.get(ctx, base+"/agent/get-osinfo", &osinfo); err == nil {
 		if osinfo.Result.PrettyName != "" {
-			e.Attributes["os.name"] = osinfo.Result.PrettyName
+			e.Attributes["os.name"] = short(osinfo.Result.PrettyName)
 		}
 		if osinfo.Result.ID != "" {
-			e.Attributes["os.id"] = osinfo.Result.ID
+			e.Attributes["os.id"] = short(osinfo.Result.ID)
 		}
 		if osinfo.Result.VersionID != "" {
-			e.Attributes["os.version_id"] = osinfo.Result.VersionID
+			e.Attributes["os.version_id"] = short(osinfo.Result.VersionID)
 		}
 	}
 }
 
 func appendNew(list []string, v string) []string {
+	if len(list) >= maxIPsPerNIC || len(v) > 64 {
+		return list
+	}
 	for _, x := range list {
 		if x == v {
 			return list

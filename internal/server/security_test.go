@@ -80,6 +80,25 @@ func TestAgentCannotHijackDevices(t *testing.T) {
 		}
 	}
 
+	// 1b. Claiming the victim's MAC as "weak" or a foreign kind must not work either.
+	doJSON(t, anon, "POST", ts.URL+"/v1/observations", evil, obs(
+		`{"kind":"host","identifiers":[{"kind":"mac","value":"00:1a:2b:00:00:01","strength":"weak"},
+		  {"kind":"mac","value":"00:1a:2b:00:00:fe","strength":"weak"},
+		  {"kind":"proxmox.guest","value":"lab/100","strength":"strong"}]}`), nil)
+	for _, d := range devices(t, c, ts.URL) {
+		for _, id := range d.Identifiers {
+			if id.Kind == "mac" && id.Value == "00:1a:2b:00:00:01" && d.Name != "db01" {
+				t.Fatalf("weak claim moved victim MAC to %q", d.Name)
+			}
+			if id.Kind == "mac" && id.Value == "00:1a:2b:00:00:fe" && d.Name != "gw" {
+				t.Fatalf("weak claim moved gateway MAC to %q", d.Name)
+			}
+			if id.Kind == "proxmox.guest" {
+				t.Fatalf("agent set a foreign identifier kind on %q", d.Name)
+			}
+		}
+	}
+
 	// 2. Identifier flood: the server's agent identifier must survive the cap.
 	var ids []string
 	for i := 0; i < 300; i++ {

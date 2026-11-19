@@ -49,7 +49,7 @@ func (s *DB) DeleteJoinToken(ctx context.Context, id int64) error {
 
 // Enroll consumes one use of a join token and creates the peer, in one
 // transaction. A join token with a fixed name ignores the requested name.
-func (s *DB) Enroll(ctx context.Context, joinHash []byte, name string, tokenHash []byte, now time.Time) (store.Peer, error) {
+func (s *DB) Enroll(ctx context.Context, joinHash []byte, name string, tokenHash []byte, now time.Time, allow func(name string) error) (store.Peer, error) {
 	var p store.Peer
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -70,6 +70,11 @@ func (s *DB) Enroll(ctx context.Context, joinHash []byte, name string, tokenHash
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return p, errors.New("peer name is required")
+	}
+	if allow != nil {
+		if err := allow(name); err != nil {
+			return p, err
+		}
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE join_tokens SET uses_left = uses_left - 1 WHERE id = ?`, jid); err != nil {
 		return p, err

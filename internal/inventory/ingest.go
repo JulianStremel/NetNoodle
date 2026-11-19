@@ -166,8 +166,10 @@ func (r *resolver) apply(e *proto.Entity, parentID int64) (int64, error) {
 	}
 
 	for _, id := range e.Identifiers {
-		if r.agent != "" && id.Strength == proto.Strong {
-			// An agent must not take a strong identifier from another device.
+		if r.agent != "" && !movableByAgent[id.Kind] {
+			// An agent must not take an identifier (whatever strength it
+			// claims) from another device. Only IP addresses and host
+			// names may move, as they do with DHCP.
 			owner, ok, err := tx.Lookup(id.Kind, id.Value)
 			if err != nil {
 				return 0, err

@@ -191,6 +191,14 @@ func newRateLimiter(n int, window time.Duration) *rateLimiter {
 func (l *rateLimiter) allow(key string, now time.Time) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if len(l.hits) > maxTrackedIPs {
+		// Drop keys without recent hits (for example removed peers).
+		for k, ts := range l.hits {
+			if len(ts) == 0 || now.Sub(ts[len(ts)-1]) > l.window {
+				delete(l.hits, k)
+			}
+		}
+	}
 	ts := l.hits[key]
 	i := 0
 	for i < len(ts) && now.Sub(ts[i]) > l.window {

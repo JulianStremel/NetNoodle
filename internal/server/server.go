@@ -94,7 +94,7 @@ func (s *Server) Handler() http.Handler {
 		files.ServeHTTP(w, r)
 	})
 
-	return securityHeaders(jsonOnlyWrites(s.withUser(mux)))
+	return securityHeaders(bodyLimits(jsonOnlyWrites(s.withUser(mux))))
 }
 
 func securityHeaders(next http.Handler) http.Handler {
@@ -124,16 +124,23 @@ func jsonOnlyWrites(next http.Handler) http.Handler {
 				writeErr(w, http.StatusUnsupportedMediaType, "content type must be application/json")
 				return
 			}
-			// Small bodies and a short read deadline everywhere, except for
-			// observations from authenticated peers. This bounds memory and
-			// stops slow-body (slowloris) requests.
-			limit, deadline := int64(64<<10), 20*time.Second
-			if r.URL.Path == "/v1/observations" {
-				limit, deadline = maxObservation, 5*time.Minute
-			}
-			_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(deadline))
-			r.Body = http.MaxBytesReader(w, r.Body, limit)
 		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// bodyLimits sets a small body limit and a short read deadline on every
+// request (before any other check), except for POSTs of observations,
+// which can be large. This bounds memory and stops slow-body requests,
+// also on paths that reject the request without reading the body.
+func bodyLimits(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		limit, deadline := int64(64<<10), 20*time.Second
+		if r.Method == http.MethodPost && r.URL.Path == "/v1/observations" {
+			limit, deadline = maxObservation, 5*time.Minute
+		}
+		_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(deadline))
+		r.Body = http.MaxBytesReader(w, r.Body, limit)
 		next.ServeHTTP(w, r)
 	})
 }
@@ -193,7 +200,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	tok := RandomToken(32)
 	exp := now.Add(s.cfg.SessionTTL.Duration)
-	if err := s.st.CreateSession(r.Context(), HashToken(tok), u.ID, exp); err != nil {
+	if err := s.st.CreateSession(r.Context(), HashToken(tok), u.ID, u.PassHash, exp); err != nil {
 		s.log.Error("create session", "err", err)
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return

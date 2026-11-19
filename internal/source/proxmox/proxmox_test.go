@@ -80,11 +80,11 @@ func TestPoll(t *testing.T) {
 		t.Fatalf("observations = %d", len(obs))
 	}
 	n1 := obs[0].Entities[0]
-	if n1.Name != "pve1" || n1.Identifiers[0].Value != "lab/pve1" || n1.Attributes["pve.version"] != "8.2.4" || len(n1.Children) != 2 {
+	if n1.Name != "pve1" || n1.Identifiers[0].Value != "pve/lab/pve1" || n1.Attributes["pve.version"] != "8.2.4" || len(n1.Children) != 2 {
 		t.Fatalf("node pve1 = %+v", n1)
 	}
 	web := n1.Children[0]
-	if web.Kind != proto.KindVM || web.Identifiers[0].Value != "lab/100" || web.Attributes["os.id"] != "debian" ||
+	if web.Kind != proto.KindVM || web.Identifiers[0].Value != "pve/lab/100" || web.Attributes["os.id"] != "debian" ||
 		len(web.Interfaces) != 1 || web.Interfaces[0].MAC != "bc:24:11:00:01:00" ||
 		strings.Join(web.Interfaces[0].IPs, ",") != "10.0.0.50,fe80::1" {
 		t.Fatalf("web = %+v", web)

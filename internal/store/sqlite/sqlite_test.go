@@ -43,7 +43,10 @@ func TestUsersAndSessions(t *testing.T) {
 
 	now := time.Now()
 	tok := []byte("tokenhash")
-	if err := db.CreateSession(ctx, tok, id, now.Add(time.Hour)); err != nil {
+	if err := db.CreateSession(ctx, []byte("other"), id, []byte("stale"), now.Add(time.Hour)); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("session with a stale password hash: err = %v", err)
+	}
+	if err := db.CreateSession(ctx, tok, id, u.PassHash, now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	if u, err := db.SessionUser(ctx, tok, now); err != nil || u.Name != "admin" {

@@ -178,10 +178,17 @@ func (s *DB) SetPassword(ctx context.Context, id int64, passHash []byte) error {
 
 // --- sessions ---
 
-func (s *DB) CreateSession(ctx context.Context, tokenHash []byte, userID int64, expires time.Time) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO sessions(token_hash, user_id, expires_at) VALUES (?, ?, ?)`,
-		tokenHash, userID, ts(expires))
-	return err
+func (s *DB) CreateSession(ctx context.Context, tokenHash []byte, userID int64, passHash []byte, expires time.Time) error {
+	r, err := s.db.ExecContext(ctx, `INSERT INTO sessions(token_hash, user_id, expires_at)
+		SELECT ?, id, ? FROM users WHERE id = ? AND pass_hash = ?`,
+		tokenHash, ts(expires), userID, passHash)
+	if err != nil {
+		return err
+	}
+	if n, _ := r.RowsAffected(); n == 0 {
+		return store.ErrConflict
+	}
+	return nil
 }
 
 func (s *DB) SessionUser(ctx context.Context, tokenHash []byte, now time.Time) (store.User, error) {

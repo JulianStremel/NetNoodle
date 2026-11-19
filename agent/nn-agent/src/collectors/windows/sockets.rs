@@ -65,6 +65,31 @@ fn process_name(path: &str) -> String {
     path.rsplit(['\\', '/']).next().unwrap_or("").into()
 }
 
+/// Owner of a process that hosts one or more services. Several services in
+/// one process (svchost) do not tell which of them owns a socket: then the
+/// name lists them and no executable is given, so no program is guessed.
+fn shared_owner(mut services: Vec<(String, String)>) -> (String, String) {
+    if services.len() == 1 {
+        return services.remove(0);
+    }
+    let same_exe = services
+        .windows(2)
+        .all(|w| w[0].1.eq_ignore_ascii_case(&w[1].1));
+    let mut names: Vec<&str> = services.iter().map(|s| s.0.as_str()).collect();
+    names.sort_unstable();
+    let more = names.len().saturating_sub(4);
+    let mut label = names[..names.len().min(4)].join(", ");
+    if more > 0 {
+        label.push_str(&format!(" +{more}"));
+    }
+    let exe = if same_exe && !services.is_empty() {
+        services[0].1.clone()
+    } else {
+        String::new()
+    };
+    (label, exe)
+}
+
 #[cfg(windows)]
 pub struct Sockets;
 #[cfg(windows)]
@@ -397,7 +422,7 @@ mod win {
             return Err(error("OpenSCManagerW", unsafe { GetLastError() }));
         }
         let manager = ServiceHandle(manager);
-        let mut out = BTreeMap::new();
+        let mut out: BTreeMap<u32, Vec<(String, String)>> = BTreeMap::new();
         let mut resume = 0;
         let mut capacity = 64 * 1024;
         loop {
@@ -434,7 +459,7 @@ mod win {
                 // SAFETY: returned bounds were validated and the API filled this array and its strings.
                 let service = unsafe { &*buf.ptr().cast::<ENUM_SERVICE_STATUS_PROCESSW>().add(i) };
                 let pid = service.ServiceStatusProcess.dwProcessId;
-                if pid == 0 || out.contains_key(&pid) {
+                if pid == 0 {
                     continue;
                 }
                 // SAFETY: lpServiceName is terminated and lives in buf.
@@ -460,10 +485,13 @@ mod win {
                 } else {
                     process_name(&exe)
                 };
-                out.insert(pid, (process, exe));
+                out.entry(pid).or_default().push((process, exe));
             }
             if ok != 0 {
-                return Ok(out);
+                return Ok(out
+                    .into_iter()
+                    .map(|(pid, v)| (pid, shared_owner(v)))
+                    .collect());
             }
             if returned == 0 {
                 if capacity >= 256 * 1024 {
@@ -478,6 +506,16 @@ mod win {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn shared_service_processes() {
+        let one = shared_owner(vec![("Dnscache".into(), r"C:\x\dnsrslvr.dll".into())]);
+        assert_eq!(one.1, r"C:\x\dnsrslvr.dll");
+        let two = shared_owner(vec![
+            ("b".into(), r"C:\x\b.dll".into()),
+            ("a".into(), r"C:\x\a.dll".into()),
+        ]);
+        assert_eq!(two, ("a, b".into(), String::new()));
+    }
     #[test]
     fn service_commands() {
         for (s, expected) in [

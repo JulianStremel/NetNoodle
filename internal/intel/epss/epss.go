@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -79,14 +80,14 @@ func (e *enricher) Refresh(ctx context.Context) error {
 	if res.StatusCode/100 != 2 {
 		return fmt.Errorf("epss download returned %s", res.Status)
 	}
-	reader := bufio.NewReader(io.LimitReader(res.Body, maxDownload))
+	reader := bufio.NewReader(&capReader{r: res.Body, left: maxDownload})
 	if magic, _ := reader.Peek(2); len(magic) == 2 && magic[0] == 0x1f && magic[1] == 0x8b {
 		gz, err := gzip.NewReader(reader)
 		if err != nil {
 			return fmt.Errorf("epss gzip: %w", err)
 		}
 		defer gz.Close()
-		reader = bufio.NewReader(io.LimitReader(gz, maxDecompressed))
+		reader = bufio.NewReader(&capReader{r: gz, left: maxDecompressed})
 	}
 	var date string
 	if first, _ := reader.Peek(1); len(first) == 1 && first[0] == '#' {
@@ -145,6 +146,31 @@ func (e *enricher) Refresh(ctx context.Context) error {
 	e.data, e.date = data, date
 	e.mu.Unlock()
 	return nil
+}
+
+// capReader fails (instead of a silent EOF) when the stream is longer than
+// the limit, so a cut-off feed never replaces the cached data.
+type capReader struct {
+	r    io.Reader
+	left int64
+}
+
+var errTooLarge = errors.New("epss feed is larger than the limit")
+
+func (c *capReader) Read(p []byte) (int, error) {
+	if c.left <= 0 {
+		var one [1]byte
+		if n, _ := c.r.Read(one[:]); n > 0 {
+			return 0, errTooLarge
+		}
+		return 0, io.EOF
+	}
+	if int64(len(p)) > c.left {
+		p = p[:c.left]
+	}
+	n, err := c.r.Read(p)
+	c.left -= int64(n)
+	return n, err
 }
 
 func probability(value string) (float32, error) {

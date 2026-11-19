@@ -37,7 +37,10 @@ type Users interface {
 
 // Sessions stores web UI sessions. Only the hash of the session token is kept.
 type Sessions interface {
-	CreateSession(ctx context.Context, tokenHash []byte, userID int64, expires time.Time) error
+	// CreateSession stores a session only if the user's password hash is
+	// still passHash (the one that was checked); else ErrConflict. A
+	// password change during a login cannot leave a session behind.
+	CreateSession(ctx context.Context, tokenHash []byte, userID int64, passHash []byte, expires time.Time) error
 	SessionUser(ctx context.Context, tokenHash []byte, now time.Time) (User, error)
 	DeleteSession(ctx context.Context, tokenHash []byte) error
 	PurgeSessions(ctx context.Context, now time.Time) error
@@ -94,7 +97,7 @@ type Peers interface {
 	ListJoinTokens(ctx context.Context, now time.Time) ([]JoinToken, error)
 	DeleteJoinToken(ctx context.Context, id int64) error
 	// Enroll uses one use of the join token and creates the peer.
-	Enroll(ctx context.Context, joinHash []byte, name string, tokenHash []byte, now time.Time) (Peer, error)
+	Enroll(ctx context.Context, joinHash []byte, name string, tokenHash []byte, now time.Time, allow func(name string) error) (Peer, error)
 	PeerByToken(ctx context.Context, hash []byte) (Peer, error)
 	TouchPeer(ctx context.Context, id int64, now time.Time) error
 	ListPeers(ctx context.Context) ([]Peer, error)
