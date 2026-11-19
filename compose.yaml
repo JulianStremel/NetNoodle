@@ -1,0 +1,39 @@
+# netnoodle with Docker Compose.
+#   docker compose up -d --build          start the server
+#   docker compose logs server            first start: admin password and TLS fingerprint
+#   docker compose --profile scan up -d   also start the scanner (enroll it first, see README)
+#
+# Configuration files go in ./config (read-only in the containers):
+#   ./config/netnoodle.json   server config (optional; defaults apply without it)
+#   ./config/nn-scan.json     scanner config (needed for the scan service)
+
+services:
+  server:
+    build: { context: ., target: server }
+    image: netnoodle/server
+    restart: unless-stopped
+    ports:
+      - "7443:7443"
+    volumes:
+      - server-data:/var/lib/netnoodle/data
+      - ./config:/etc/netnoodle:ro
+
+  scan:
+    build: { context: ., target: scan }
+    image: netnoodle/scan
+    profiles: [scan]
+    restart: unless-stopped
+    depends_on: [server]
+    # In the default bridge network, the scanner finds hosts and services,
+    # but it cannot read the MAC addresses of the LAN (no shared ARP table).
+    # On a Linux host, use host networking to get MAC addresses. Then the
+    # server URL in the credentials must be https://127.0.0.1:7443 (or the
+    # LAN address of the host) instead of https://server:7443.
+    # network_mode: host
+    volumes:
+      - scan-data:/var/lib/nn-scan
+      - ./config:/etc/netnoodle:ro
+
+volumes:
+  server-data:
+  scan-data:

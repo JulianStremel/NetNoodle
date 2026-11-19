@@ -47,6 +47,7 @@ netnoodle does these tasks:
 - Operators log in with a user name and a password (bcrypt). The session cookie is `HttpOnly`, `Secure` and `SameSite=Strict`.
 - The operator API accepts only JSON for write requests. This blocks cross-site requests.
 - The server keeps its data in SQLite.
+- The server and `nn-scan` can operate in Docker containers (`Dockerfile`, `compose.yaml`). The agent and the host actor operate on the host.
 
 ### 3.2 Enrollment
 

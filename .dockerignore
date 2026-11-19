@@ -1,0 +1,10 @@
+.git
+bin
+data
+config
+agent
+docs
+*.db
+*.db-wal
+*.db-shm
+netnoodle.json
