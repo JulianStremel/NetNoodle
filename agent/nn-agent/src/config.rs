@@ -4,9 +4,18 @@ use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+#[cfg(not(windows))]
 pub const DEFAULT_CONFIG: &str = "/etc/nn-agent/config.json";
+#[cfg(windows)]
+pub const DEFAULT_CONFIG: &str = r"C:\ProgramData\netnoodle\agent\config.json";
+#[cfg(not(windows))]
 pub const DEFAULT_CREDENTIALS: &str = "/var/lib/nn-agent/credentials.json";
+#[cfg(windows)]
+pub const DEFAULT_CREDENTIALS: &str = r"C:\ProgramData\netnoodle\agent\credentials.json";
+#[cfg(not(windows))]
 pub const DEFAULT_HELPER: &str = "/run/nn-agent-helper.sock";
+#[cfg(windows)]
+pub const DEFAULT_HELPER: &str = "";
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -50,7 +59,7 @@ impl Config {
         ctx.helper = match &self.socket_helper {
             Some(p) if p.as_os_str().is_empty() => None,
             Some(p) => Some(p.clone()),
-            None => Some(PathBuf::from(DEFAULT_HELPER)),
+            None => (!DEFAULT_HELPER.is_empty()).then(|| PathBuf::from(DEFAULT_HELPER)),
         };
         ctx
     }

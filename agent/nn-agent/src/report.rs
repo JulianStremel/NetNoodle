@@ -104,7 +104,7 @@ mod tests {
     #[test]
     fn debian_fixture_end_to_end() {
         let ctx = crate::collectors::testctx("debian");
-        let all = crate::collectors::all();
+        let all = crate::collectors::linux();
         let r = collect(&ctx, &all);
         // rpm finds no database and returns nothing; no collector fails.
         assert!(r.errors.is_empty(), "{:?}", r.errors);
