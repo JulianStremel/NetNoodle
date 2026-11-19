@@ -194,6 +194,41 @@ The helper is a separate program with two capabilities: `CAP_SYS_PTRACE` and `CA
 It has no input. It only gives the programs of listening sockets.
 Only members of the group `nn-agent` can connect to it. The agent itself keeps no capabilities.
 
+## Procedure: install the agent on Windows
+
+`nn-agent` operates on Windows 10, Windows 11 and Windows Server (x64). It does not need administrator rights to collect data.
+You need administrator rights only to install it.
+
+1. Build the program on a Windows computer with Rust: `cd agent` and `cargo build --release -p nn-agent`.
+2. In an administrator PowerShell, copy the program and make the data directory:
+
+   ```powershell
+   New-Item -ItemType Directory -Force "C:\Program Files\netnoodle", "C:\ProgramData\netnoodle\agent"
+   Copy-Item agent\target\release\nn-agent.exe "C:\Program Files\netnoodle\"
+   icacls "C:\ProgramData\netnoodle\agent" /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F" "LOCAL SERVICE:(OI)(CI)M"
+   ```
+
+3. Make a join token with the role `agent` on the **Peers** page. Enroll:
+
+   ```powershell
+   $env:NN_JOIN_TOKEN = "<join token>"
+   & "C:\Program Files\netnoodle\nn-agent.exe" enroll --server https://<server>:7443 --fingerprint <sha256>
+   Remove-Item Env:NN_JOIN_TOKEN
+   ```
+
+4. Make a scheduled task that sends a report each hour as `LOCAL SERVICE`:
+
+   ```powershell
+   $a = New-ScheduledTaskAction -Execute "C:\Program Files\netnoodle\nn-agent.exe" -Argument "run --once"
+   $t = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Hours 1)
+   $p = New-ScheduledTaskPrincipal -UserId "NT AUTHORITY\LOCAL SERVICE" -LogonType ServiceAccount
+   Register-ScheduledTask -TaskName "netnoodle agent" -Action $a -Trigger $t -Principal $p
+   ```
+
+The agent reports the Windows version and build, the installed programs, the listening ports with their programs, and the network interfaces.
+
+> **Note:** The server does not find vulnerabilities in Windows yet. OSV has no data for Windows. Refer to [docs/design/windows-agent.md](docs/design/windows-agent.md).
+
 ## Procedure: import from UniFi
 
 1. In UniFi Network, open **Settings > Control Plane > Integrations**.
