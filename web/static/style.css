@@ -90,3 +90,8 @@ th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: upp
 .pill.ok { color: var(--ok); border-color: var(--ok); }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; }
 .stat .n { font-size: 1.8rem; font-weight: 700; }
+.row { display: flex; gap: .5rem; align-items: center; margin-bottom: .75rem; }
+.row input { margin-top: 0; max-width: 360px; }
+a { color: var(--accent); }
+form .grid { margin-bottom: .75rem; }
+.gap { height: .75rem; }

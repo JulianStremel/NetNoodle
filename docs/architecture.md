@@ -48,9 +48,20 @@ netnoodle does these tasks:
 - The operator API accepts only JSON for write requests. This blocks cross-site requests.
 - The server keeps its data in SQLite.
 
-### 3.2 Discovery
+### 3.2 Enrollment
 
-- `nn-scan` is a separate program. Thus, it can operate in each subnet. It finds hosts with ICMP and TCP connections. It reads banners, HTTP headers, TLS certificates and the local ARP table.
+1. An operator makes a join token in the web interface. The token has a role (`source`, `agent` or `actor`), a number of uses and an expiry time.
+2. The peer sends the join token to `POST /v1/enroll`.
+3. The server gives a peer token. The server keeps only the SHA-256 hash of the token.
+4. The peer sends the peer token as a bearer token in each request.
+
+The server sets the source name of each observation to the name of the peer.
+An agent can send only one top-level entity. The server adds the identifier `agent=<peer name>` to it.
+Thus, an agent cannot report data for a different device.
+
+### 3.2a Discovery
+
+- `nn-scan` is a separate program. Thus, it can operate in each subnet. It finds hosts with TCP connections. An open port or a refused connection shows that the host is on. It reads banners, HTTP headers, TLS certificates and the local ARP table. It does not need root permissions.
 - The `unifi` source operates in the server. It uses a read-only API key. It reads clients and network devices.
 - The `proxmox` source operates in the server. It uses an API token with the role `PVEAuditor`. It reads cluster nodes, virtual machines and containers.
 
@@ -159,7 +170,7 @@ The Go types are in `internal/proto`. The Rust types are in `agent/nn-proto`.
 | ID | Contents | Status |
 |---|---|---|
 | M0 | Skeleton: protocol, registries, server with store, TLS, login and web interface shell | Done |
-| M1 | Ingest API, identity resolver, `nn-scan`, `unifi` source, device list | Not done |
+| M1 | Ingest API, identity resolver, `nn-scan`, `unifi` source, device list | Done |
 | M2 | Agent enrollment, collectors `os`, `dpkg`, `rpm`, `apk`, `sockets`, `interfaces` | Not done |
 | M3 | OSV, KEV and EPSS, findings page | Not done |
 | M4 | `proxmox` source, collectors `containers`, `lxc`, `qga`, device tree | Not done |

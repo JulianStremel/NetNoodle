@@ -1,7 +1,7 @@
 // netnoodle web UI. Plain ES modules, no build step.
 // Each view is a function that renders into #view; views register in VIEWS.
 
-const $ = (sel, root = document) => root.querySelector(sel);
+export const $ = (sel, root = document) => root.querySelector(sel);
 
 export async function api(path, opts = {}) {
   const init = { method: opts.method || "GET", headers: {}, credentials: "same-origin" };
@@ -44,8 +44,9 @@ export function table(cols, rows) {
 
 export const fmtTime = (s) => (s ? new Date(s).toLocaleString() : "");
 
-const VIEWS = {
-  overview: async (root) => {
+const VIEWS = {};
+
+async function overview(root) {
     const info = await api("/api/info");
     root.append(
       el("div", { class: "card" },
@@ -53,8 +54,9 @@ const VIEWS = {
         el("p", {}, "Protocol ", info.protocol),
         el("p", {}, "TLS fingerprint (pin this in agents, scanners and actors):"),
         el("p", { class: "mono" }, info.tls_fingerprint)));
-  },
-  events: async (root) => {
+}
+
+async function events(root) {
     const ev = await api("/api/events");
     root.append(el("div", { class: "card" }, el("h2", {}, "Events"),
       table([
@@ -63,8 +65,7 @@ const VIEWS = {
         { title: "By", key: "actor" },
         { title: "Summary", key: "summary" },
       ], ev)));
-  },
-};
+}
 
 // registerView lets later modules add pages without changing this file.
 export function registerView(name, title, fn) {
@@ -127,6 +128,11 @@ $("#logout").addEventListener("click", async () => {
   showLogin();
 });
 
-window.addEventListener("hashchange", render);
+registerView("overview", "Overview", overview);
 
-api("/api/me").then((r) => showApp(r.user)).catch(() => showLogin());
+// start is called by main.js after all page modules have registered.
+export function start() {
+  registerView("events", "Events", events);
+  window.addEventListener("hashchange", render);
+  api("/api/me").then((r) => showApp(r.user)).catch(() => showLogin());
+}

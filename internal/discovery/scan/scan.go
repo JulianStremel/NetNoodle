@@ -29,6 +29,9 @@ var DefaultPorts = []int{
 	3306, 3389, 5000, 5432, 5900, 6379, 8000, 8006, 8080, 8123, 8443, 8888, 9000, 9100, 9443,
 }
 
+// portsPerHost limits parallel connections to one host.
+const portsPerHost = 16
+
 var tlsPorts = map[int]bool{443: true, 636: true, 993: true, 995: true, 5986: true, 8006: true, 8443: true, 9443: true}
 var httpPorts = map[int]bool{80: true, 5000: true, 8000: true, 8080: true, 8123: true, 8888: true, 9000: true}
 
@@ -61,7 +64,7 @@ func New(cfg Config) (*Scanner, error) {
 		cfg.Timeout = 800 * time.Millisecond
 	}
 	if cfg.Concurrency <= 0 {
-		cfg.Concurrency = 128
+		cfg.Concurrency = 32
 	}
 	if cfg.MaxHosts <= 0 {
 		cfg.MaxHosts = 4096
@@ -165,13 +168,25 @@ func (s *Scanner) Scan(ctx context.Context) ([]proto.Entity, error) {
 		go func() {
 			defer wg.Done()
 			for a := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
+				// Probe the ports of one host in parallel; results keep port order.
+				res := make([]portResult, len(s.cfg.Ports))
+				var pwg sync.WaitGroup
+				sem := make(chan struct{}, portsPerHost)
+				for i, port := range s.cfg.Ports {
+					pwg.Add(1)
+					sem <- struct{}{}
+					go func() {
+						defer func() { <-sem; pwg.Done() }()
+						res[i] = s.probe(ctx, a, port)
+					}()
+				}
+				pwg.Wait()
 				alive := false
 				var svcs []proto.Service
-				for _, port := range s.cfg.Ports {
-					if ctx.Err() != nil {
-						return
-					}
-					r := s.probe(ctx, a, port)
+				for _, r := range res {
 					if r.open {
 						svcs = append(svcs, r.svc)
 					}
