@@ -4,6 +4,9 @@
 package plugins
 
 import (
+	_ "netnoodle/internal/intel/epss"
+	_ "netnoodle/internal/intel/kev"
+	_ "netnoodle/internal/intel/osv"
 	_ "netnoodle/internal/notify/webhook"
 	_ "netnoodle/internal/source/unifi"
 )

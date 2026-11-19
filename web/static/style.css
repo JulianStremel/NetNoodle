@@ -42,7 +42,8 @@ body {
   border-bottom: 1px solid var(--line);
   flex-wrap: wrap;
 }
-.brand { font-weight: 700; letter-spacing: .02em; }
+.brand { display: inline-flex; align-items: center; gap: .45rem; font-weight: 700; letter-spacing: .02em; color: var(--fg); text-decoration: none; }
+.login-title { display: flex; flex-direction: column; align-items: center; gap: .4rem; text-align: center; }
 nav { display: flex; gap: .9rem; flex-wrap: wrap; }
 nav a { color: var(--muted); text-decoration: none; }
 nav a.active { color: var(--fg); font-weight: 600; }
@@ -98,3 +99,29 @@ th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: upp
 a { color: var(--accent); }
 form .grid { margin-bottom: .75rem; }
 .gap { height: .75rem; }
+
+/* Severity */
+.sev { display: inline-block; min-width: 4.6rem; padding: 0 .45rem; border-radius: 999px; font-size: 12px; font-weight: 600; text-align: center; color: #fff; white-space: nowrap; }
+.sev.critical { background: #8e1b1b; }
+.sev.high { background: #d2452f; }
+.sev.medium { background: #c98a00; }
+.sev.low { background: #5b7083; }
+.sev.unknown { background: transparent; color: var(--muted); border: 1px solid var(--line); }
+.tag { display: inline-block; padding: 0 .4rem; border-radius: 4px; font-size: 11px; font-weight: 700; letter-spacing: .03em; white-space: nowrap; }
+.tag.kev { background: #1d1d1f; color: #ffcc00; }
+.tag.exposed { background: var(--warn); color: #fff; }
+.small { font-size: 12px; }
+.nowrap { white-space: nowrap; }
+.stat { text-decoration: none; color: inherit; display: block; }
+.stat .n { line-height: 1.1; }
+.stat .l { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
+.stat.critical .n { color: #b42318; }
+.stat.high .n { color: #d2452f; }
+.stat.medium .n { color: #c98a00; }
+.filters { display: flex; flex-wrap: wrap; gap: .75rem; align-items: end; margin-bottom: .75rem; }
+.filters label { margin: 0; }
+.filters input[type=search] { min-width: 260px; }
+.check { display: inline-flex; align-items: center; gap: .35rem; color: var(--fg); }
+.check input { width: auto; margin: 0; display: inline; }
+.chip { display: inline-flex; gap: .4rem; align-items: center; padding: .1rem .5rem; border: 1px solid var(--line); border-radius: 999px; }
+.summary { margin: .1rem 0 0; color: var(--muted); font-size: 12px; max-width: 46rem; }

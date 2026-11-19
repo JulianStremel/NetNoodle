@@ -7,6 +7,7 @@ import (
 	"errors"
 	"time"
 
+	"netnoodle/internal/intel"
 	"netnoodle/internal/inventory"
 	"netnoodle/internal/proto"
 )
@@ -117,6 +118,9 @@ type DeviceRow struct {
 	Sources     []string           `json:"sources"`
 	Components  int                `json:"components"`
 	Services    int                `json:"services"`
+	Findings    int                `json:"findings"`  // open findings
+	MaxScore    float64            `json:"max_score"` // highest CVSS score of the open findings
+	KEV         int                `json:"kev"`       // open findings that are known exploited
 }
 
 // IDRow is an identifier with its provenance.
@@ -172,6 +176,77 @@ type Inventory interface {
 	PurgeObservations(ctx context.Context, before time.Time) error
 }
 
+// Finding is one vulnerability in one component of one device.
+type Finding struct {
+	DeviceID   int64  `json:"device_id"`
+	PURL       string `json:"purl"`
+	VulnID     string `json:"vuln_id"`
+	Fixed      string `json:"fixed"`
+	Confidence string `json:"confidence"`
+}
+
+// FindingFilter selects findings for ListFindings.
+type FindingFilter struct {
+	DeviceID int64   // 0: all devices
+	State    string  // "open" (default), "resolved" or "all"
+	MinScore float64 // only findings with at least this CVSS score
+	KEV      bool    // only known exploited
+	Limit    int     // default 2000, maximum 20000
+}
+
+// FindingRow is a finding with the data of its vulnerability and device.
+type FindingRow struct {
+	Finding
+	Source     string            `json:"source"`
+	State      string            `json:"state"`
+	DeviceName string            `json:"device_name"`
+	DeviceKind string            `json:"device_kind"`
+	Package    string            `json:"package"`
+	Version    string            `json:"version"`
+	Aliases    []string          `json:"aliases"`
+	Summary    string            `json:"summary"`
+	Score      float64           `json:"score"`
+	Vector     string            `json:"vector"`
+	KEV        bool              `json:"kev"`
+	EPSS       float64           `json:"epss"`
+	EPSSPct    float64           `json:"epss_pct"`
+	Facts      map[string]string `json:"facts,omitempty"`
+	Exposed    []string          `json:"exposed"` // listening, non-loopback services of the package, e.g. "80/tcp"
+	FirstSeen  time.Time         `json:"first_seen"`
+	LastSeen   time.Time         `json:"last_seen"`
+	ResolvedAt time.Time         `json:"resolved_at,omitzero"`
+}
+
+// FindingStats counts the open findings.
+type FindingStats struct {
+	Open     int `json:"open"`
+	Critical int `json:"critical"`
+	High     int `json:"high"`
+	Medium   int `json:"medium"`
+	Low      int `json:"low"`
+	Unknown  int `json:"unknown"`
+	KEV      int `json:"kev"`
+	Exposed  int `json:"exposed"`
+	Devices  int `json:"devices"`
+	Vulns    int `json:"vulns"`
+}
+
+// Intel stores vulnerabilities and findings.
+type Intel interface {
+	// DeviceComponents returns the components of a device (one per PURL).
+	DeviceComponents(ctx context.Context, deviceID int64) ([]proto.Component, error)
+	// DevicesWithComponents returns the IDs of all devices that have components.
+	DevicesWithComponents(ctx context.Context) ([]int64, error)
+	// PutVulns inserts or updates vulnerabilities.
+	PutVulns(ctx context.Context, vs []intel.Vuln, at time.Time) error
+	// SyncFindings makes fs the open findings of the device for this source.
+	// Findings not in fs are resolved. It returns the findings that are new
+	// or open again.
+	SyncFindings(ctx context.Context, deviceID int64, source string, fs []Finding, at time.Time) ([]Finding, error)
+	ListFindings(ctx context.Context, f FindingFilter) ([]FindingRow, error)
+	FindingStats(ctx context.Context) (FindingStats, error)
+}
+
 // Store is the full persistence interface.
 type Store interface {
 	Users
@@ -179,5 +254,6 @@ type Store interface {
 	Events
 	Peers
 	Inventory
+	Intel
 	Close() error
 }

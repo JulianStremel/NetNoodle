@@ -28,7 +28,7 @@ export function el(tag, attrs = {}, ...children) {
     else if (k.startsWith("on")) n.addEventListener(k.slice(2), v);
     else n.setAttribute(k, v === true ? "" : v);
   }
-  for (const c of children.flat()) {
+  for (const c of children.flat(Infinity)) {
     if (c === undefined || c === null || c === false) continue;
     n.append(c instanceof Node ? c : document.createTextNode(String(c)));
   }
@@ -46,14 +46,88 @@ export const fmtTime = (s) => (s ? new Date(s).toLocaleString() : "");
 
 const VIEWS = {};
 
+// Severity helpers, shared by the pages.
+export function sevLabel(score) {
+  if (score >= 9) return "critical";
+  if (score >= 7) return "high";
+  if (score >= 4) return "medium";
+  if (score > 0) return "low";
+  return "unknown";
+}
+export const sevPill = (score) =>
+  el("span", { class: `sev ${sevLabel(score)}`, title: score ? `CVSS ${score.toFixed(1)}` : "no score" },
+    score ? `${sevLabel(score)} ${score.toFixed(1)}` : "unknown");
+
+// Query parameters of the hash route, e.g. #/findings?device=3.
+export function hashParams() {
+  const q = location.hash.split("?")[1] || "";
+  return new URLSearchParams(q);
+}
+
+const ago = (s) => {
+  if (!s) return "never";
+  const sec = Math.round((Date.now() - new Date(s).getTime()) / 1000);
+  if (sec < 90) return `${sec}s ago`;
+  if (sec < 5400) return `${Math.round(sec / 60)}m ago`;
+  if (sec < 129600) return `${Math.round(sec / 3600)}h ago`;
+  return `${Math.round(sec / 86400)}d ago`;
+};
+export { ago };
+
 async function overview(root) {
-    const info = await api("/api/info");
-    root.append(
-      el("div", { class: "card" },
-        el("h2", {}, "Server"),
-        el("p", {}, "Protocol ", info.protocol),
-        el("p", {}, "TLS fingerprint (pin this in agents, scanners and actors):"),
-        el("p", { class: "mono" }, info.tls_fingerprint)));
+  const o = await api("/api/overview");
+  const f = o.findings;
+  const stat = (n, label, cls, href) =>
+    el("a", { class: `card stat ${cls || ""}`, href: href || "#/findings" }, el("div", { class: "n" }, String(n)), el("div", { class: "l" }, label));
+
+  root.append(el("div", { class: "grid" },
+    stat(f.critical, "Critical", "critical", "#/findings?min=9"),
+    stat(f.high, "High", "high", "#/findings?min=7"),
+    stat(f.medium, "Medium", "medium", "#/findings?min=4"),
+    stat(f.kev, "Known exploited", "critical", "#/findings?kev=1"),
+    stat(f.exposed, "On listening ports", "high", "#/findings?exposed=1"),
+    stat(`${f.devices}/${o.devices}`, "Devices affected", "", "#/devices")));
+
+  const kinds = Object.entries(o.device_kinds).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${n} ${k}`).join(", ");
+  const roles = Object.entries(o.peers).map(([k, n]) => `${n} ${k}`).join(", ") || "none";
+  const intel = o.intel;
+  const refresh = el("button", {
+    onclick: async () => {
+      refresh.disabled = true;
+      await api("/api/intel/refresh", { method: "POST", body: {} });
+      refresh.textContent = "Refresh started";
+    },
+  }, "Refresh feeds now");
+
+  root.append(el("div", { class: "grid" },
+    el("div", { class: "card" }, el("h2", {}, "Inventory"),
+      el("p", {}, `${o.devices} devices`, kinds ? ` (${kinds})` : ""),
+      el("p", {}, `${o.agent_devices} with an agent`),
+      el("p", {}, `Enrolled peers: ${roles}`),
+      el("p", { class: "muted small" }, `${f.open} open findings in ${f.vulns} vulnerabilities`)),
+    el("div", { class: "card" }, el("h2", {}, "Threat feeds"),
+      intel.matchers.length === 0 && intel.feeds.length === 0
+        ? el("p", { class: "muted" }, "Disabled in the configuration.")
+        : [
+          el("p", {}, "Matchers: ", intel.matchers.join(", ") || "none"),
+          intel.feeds.map((fd) => el("p", {}, `${fd.name}: `,
+            fd.last_error ? el("span", { class: "error", title: fd.last_error }, "error") : `updated ${ago(fd.last_ok)}`)),
+          el("p", {}, `Last match ${ago(intel.last_match)}`, intel.queued ? ` · ${intel.queued} queued` : ""),
+          intel.last_error ? el("p", { class: "error small" }, intel.last_error) : "",
+          refresh,
+        ]),
+    el("div", { class: "card" }, el("h2", {}, "Server"),
+      el("p", { class: "muted small" }, "TLS fingerprint. Pin it in agents, scanners and actors:"),
+      el("p", { class: "mono" }, o.tls_fingerprint))));
+
+  root.append(el("div", { class: "card" }, el("h2", {}, "Recent events"),
+    o.events.length === 0 ? el("p", { class: "muted" }, "No events.") :
+      table([
+        { title: "Time", render: (e) => el("span", { class: "nowrap" }, fmtTime(e.at)) },
+        { title: "Type", key: "type" },
+        { title: "By", key: "actor" },
+        { title: "Summary", key: "summary" },
+      ], o.events), el("p", {}, el("a", { href: "#/events" }, "All events →"))));
 }
 
 async function events(root) {
@@ -76,7 +150,7 @@ export function registerView(name, title, fn) {
 }
 
 function currentView() {
-  const v = location.hash.replace(/^#\/?/, "").split("/")[0];
+  const v = location.hash.replace(/^#\/?/, "").split(/[/?]/)[0];
   return v || "overview";
 }
 

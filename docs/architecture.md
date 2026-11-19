@@ -114,10 +114,15 @@ Each device can have a parent. Example: a virtual machine has its hypervisor nod
 
 ### 3.5 Threat feed and matching
 
-- The `osv` matcher sends the package URL and the version to OSV. OSV compares the versions.
+- The `osv` matcher maps each package URL to an OSV ecosystem (`Debian:12`, `Ubuntu:22.04:LTS`, `Alpine:v3.19`, `Rocky Linux:9`, `AlmaLinux:9`). For Debian, Ubuntu and Alpine it uses the source package (`upstream` qualifier). OSV compares the versions.
+- The matcher keeps its answers for 24 hours. It sends only package names, versions and the distribution release.
+- The CVSS score comes from the OSV record. If the record has no CVSS vector, the matcher uses the CVE record. Then it uses the severity word of the distribution.
 - The `kev` and `epss` enrichers add the known-exploited status and the exploit probability.
 - A new report starts a match for that device. A feed update starts a match for all devices.
-- A version from a banner gives a finding with low confidence.
+- If a matcher fails, the server keeps the earlier findings of the device. It does not close them.
+- A finding that a new match does not show is closed (`resolved`). If it occurs again, it opens again.
+- A finding is "exposed" if a listening service on a non-loopback address belongs to the vulnerable package.
+- Versions from scan banners do not give findings yet. OSV has no data for product names from banners.
 
 ### 3.6 Decisions
 
@@ -182,7 +187,7 @@ The Go types are in `internal/proto`. The Rust types are in `agent/nn-proto`.
 | M0 | Skeleton: protocol, registries, server with store, TLS, login and web interface shell | Done |
 | M1 | Ingest API, identity resolver, `nn-scan`, `unifi` source, device list | Done |
 | M2 | Agent enrollment, collectors `os`, `dpkg`, `rpm`, `apk`, `sockets`, `interfaces` | Done |
-| M3 | OSV, KEV and EPSS, findings page | Not done |
+| M3 | OSV, KEV and EPSS, findings page | Done |
 | M4 | `proxmox` source, collectors `containers`, `lxc`, `qga`, device tree | Not done |
 | M5 | `rules` decider, guards, approval queue, webhook notifier | Not done |
 | M6 | Actor protocol, signed orders, `nn-actor`, `nn-actor-host`, time limits | Not done |

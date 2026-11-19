@@ -24,6 +24,7 @@ type Server struct {
 	fingerprint string
 	limiter     *loginLimiter
 	notifiers   []notify.Notifier
+	intel       *intelState
 	now         func() time.Time
 }
 
@@ -36,6 +37,7 @@ func New(cfg Config, st store.Store, ui fs.FS, fingerprint string, log *slog.Log
 		ui:          ui,
 		fingerprint: fingerprint,
 		limiter:     newLoginLimiter(),
+		intel:       newIntelState(),
 		now:         time.Now,
 	}
 }
@@ -54,6 +56,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/logout", s.handleLogout)
 	mux.HandleFunc("GET /api/me", requireUser(s.handleMe))
 	mux.HandleFunc("GET /api/info", requireUser(s.handleInfo))
+	mux.HandleFunc("GET /api/overview", requireUser(s.handleOverview))
+	mux.HandleFunc("GET /api/findings", requireUser(s.handleFindings))
+	mux.HandleFunc("POST /api/intel/refresh", requireUser(s.handleIntelRefresh))
 	mux.HandleFunc("GET /api/events", requireUser(s.handleEvents))
 	mux.HandleFunc("GET /api/devices", requireUser(s.handleListDevices))
 	mux.HandleFunc("GET /api/devices/{id}", requireUser(s.handleGetDevice))

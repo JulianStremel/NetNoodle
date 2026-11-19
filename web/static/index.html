@@ -4,12 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>netnoodle</title>
+  <link rel="icon" href="/logo.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/style.css">
   <script type="module" src="/main.js"></script>
 </head>
 <body>
   <header class="top" hidden id="top">
-    <span class="brand">netnoodle</span>
+    <a class="brand" href="#/overview"><img src="/logo.svg" alt="" width="26" height="26">netnoodle</a>
     <nav id="nav"></nav>
     <span class="spacer"></span>
     <span id="who" class="muted"></span>
@@ -18,7 +19,7 @@
 
   <main id="main">
     <section id="login" class="card narrow" hidden>
-      <h1>netnoodle</h1>
+      <h1 class="login-title"><img src="/logo.svg" alt="" width="48" height="48">netnoodle</h1>
       <form id="login-form">
         <label>User <input name="user" autocomplete="username" required value="admin"></label>
         <label>Password <input name="password" type="password" autocomplete="current-password" required></label>

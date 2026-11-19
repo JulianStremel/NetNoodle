@@ -6,8 +6,9 @@ It compares the software with vulnerability data.
 When a dangerous vulnerability occurs, netnoodle can do an action, for example block a device.
 Actions outside the automatic scope need the approval of an operator.
 
-> **Status:** Milestone M2 (agent). The server finds devices with `nn-scan` and the UniFi API, and removes duplicates.
+> **Status:** Milestone M3 (threat feed). The server finds devices with `nn-scan` and the UniFi API, and removes duplicates.
 > `nn-agent` reports the packages, listening services and interfaces of Linux hosts.
+> The server compares the packages with OSV, CISA KEV and FIRST EPSS. The **Findings** page shows the vulnerable devices.
 > Refer to [docs/architecture.md](docs/architecture.md) for the design and the milestones.
 
 ## Parts
@@ -219,6 +220,33 @@ Add a notifier to `netnoodle.json`:
 ```
 
 The server sends each event as JSON. Set `"format": "slack"` for Slack-type receivers.
+
+## Vulnerability data
+
+The server compares the packages from the agents with vulnerability data:
+
+| Plug-in | Type | Data | Source |
+|---|---|---|---|
+| `osv` | Matcher | Vulnerabilities of Debian, Ubuntu, Alpine, Rocky Linux and AlmaLinux packages | `api.osv.dev` |
+| `kev` | Enricher | Vulnerabilities that attackers use (Known Exploited Vulnerabilities) | CISA |
+| `epss` | Enricher | Probability of exploitation in the next 30 days | FIRST EPSS |
+
+The server sends only package names, versions and the distribution release to OSV. It sends no host names and no addresses.
+The server downloads the KEV and EPSS lists each day. Then it compares all devices again.
+
+To use other plug-ins or to stop the downloads, set `matchers` and `enrichers` in `netnoodle.json`. An empty list disables the plug-ins:
+
+```json
+{ "matchers": [], "enrichers": [] }
+```
+
+The **Findings** page shows the most urgent findings first:
+
+1. Vulnerabilities that attackers use (KEV).
+2. Vulnerabilities in a package that has a listening network service on the device.
+3. The CVSS score, then the EPSS probability.
+
+When a new report shows a fixed version, the server closes the finding.
 
 ## Certificate fingerprint
 

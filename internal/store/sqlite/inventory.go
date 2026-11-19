@@ -285,7 +285,10 @@ func (s *DB) PurgeObservations(ctx context.Context, before time.Time) error {
 func (s *DB) ListDevices(ctx context.Context) ([]store.DeviceRow, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT d.id, d.kind, d.name, COALESCE(d.parent_id, 0), d.first_seen, d.last_seen,
 			(SELECT COUNT(*) FROM components c WHERE c.device_id = d.id),
-			(SELECT COUNT(*) FROM services v WHERE v.device_id = d.id)
+			(SELECT COUNT(*) FROM services v WHERE v.device_id = d.id),
+			(SELECT COUNT(*) FROM findings f WHERE f.device_id = d.id AND f.state = 'open'),
+			(SELECT COALESCE(MAX(x.score), 0) FROM findings f JOIN vulns x ON x.id = f.vuln_id WHERE f.device_id = d.id AND f.state = 'open'),
+			(SELECT COUNT(*) FROM findings f JOIN vulns x ON x.id = f.vuln_id WHERE f.device_id = d.id AND f.state = 'open' AND x.kev = 1)
 		FROM devices d ORDER BY d.id`)
 	if err != nil {
 		return nil, err
@@ -295,7 +298,7 @@ func (s *DB) ListDevices(ctx context.Context) ([]store.DeviceRow, error) {
 	for rows.Next() {
 		var r store.DeviceRow
 		var first, last string
-		if err := rows.Scan(&r.ID, &r.Kind, &r.Name, &r.ParentID, &first, &last, &r.Components, &r.Services); err != nil {
+		if err := rows.Scan(&r.ID, &r.Kind, &r.Name, &r.ParentID, &first, &last, &r.Components, &r.Services, &r.Findings, &r.MaxScore, &r.KEV); err != nil {
 			rows.Close()
 			return nil, err
 		}

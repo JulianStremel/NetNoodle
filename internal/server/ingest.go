@@ -48,6 +48,9 @@ func (s *Server) Ingest(ctx context.Context, obs proto.Observation, raw []byte) 
 	for _, m := range res.Merged {
 		s.event(ctx, "device.merged", obs.Source, fmt.Sprintf("device #%d merged into #%d", m[1], m[0]))
 	}
+	if hasComponents(obs.Entities) || len(res.Merged) > 0 {
+		s.enqueueMatch(res.Devices...)
+	}
 	return res, nil
 }
 

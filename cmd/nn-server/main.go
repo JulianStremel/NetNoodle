@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"netnoodle/internal/intel"
 	"netnoodle/internal/notify"
 	_ "netnoodle/internal/plugins" // built-in plug-ins
 	"netnoodle/internal/registry"
@@ -80,6 +81,16 @@ func run() error {
 		return err
 	}
 	srv.SetNotifiers(notifiers)
+	matchers, err := registry.BuildAll(intel.Matchers, cfg.Matchers)
+	if err != nil {
+		return err
+	}
+	enrichers, err := registry.BuildAll(intel.Enrichers, cfg.Enrichers)
+	if err != nil {
+		return err
+	}
+	srv.SetIntel(matchers, enrichers)
+	go srv.RunIntel(ctx, cfg.IntelRefresh.Duration)
 	if err := srv.RunSources(ctx, cfg.Sources); err != nil {
 		return err
 	}

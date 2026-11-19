@@ -1,5 +1,6 @@
 // Devices: list and detail pages.
-import { api, el, table, fmtTime, registerView } from "./app.js";
+import { api, el, table, fmtTime, registerView, sevPill } from "./app.js";
+import { exploitCell, exposedCell, vulnCell } from "./findings.js";
 
 const idsOf = (d, kind) => d.identifiers.filter((i) => i.kind === kind).map((i) => i.value);
 
@@ -31,6 +32,7 @@ async function list(root) {
       { title: "MAC", render: (d) => el("span", { class: "mono" }, idsOf(d, "mac").join(", ")) },
       { title: "Parent", render: (d) => (d.parent_id ? el("a", { href: `#/devices/${d.parent_id}` }, byID.has(d.parent_id) ? label(byID.get(d.parent_id)) : `#${d.parent_id}`) : "") },
       { title: "Sources", render: (d) => d.sources.join(", ") },
+      { title: "Risk", render: (d) => (d.findings ? [sevPill(d.max_score), " ", el("a", { href: `#/findings?device=${d.id}`, class: "small" }, `${d.findings}`), d.kev ? [" ", el("span", { class: "tag kev" }, "KEV")] : ""] : "") },
       { title: "Pkgs", key: "components" },
       { title: "Svcs", key: "services" },
       { title: "Last seen", render: (d) => el("span", { title: fmtTime(d.last_seen) }, ago(d.last_seen)) },
@@ -97,6 +99,21 @@ async function detail(root, id) {
         { title: "Confidence", key: "confidence" },
         { title: "Source", key: "source" },
       ], d.services)));
+
+  const findings = await api(`/api/findings?device=${id}&limit=200`);
+  root.append(el("div", { class: "card" },
+    el("h2", {}, `Vulnerabilities (${findings.length}${findings.length === 200 ? "+" : ""})`),
+    findings.length === 0 ? el("p", { class: "muted" }, d.components.length ? "No open findings." : "No package data, so no findings.") : [
+      table([
+        { title: "Severity", render: (f) => sevPill(f.score) },
+        { title: "Vulnerability", render: vulnCell },
+        { title: "Exploit", render: exploitCell },
+        { title: "Package", render: (f) => [f.package, " ", el("span", { class: "muted small" }, f.version)] },
+        { title: "Fixed in", render: (f) => f.fixed || el("span", { class: "muted small" }, "no fix yet") },
+        { title: "Exposed", render: exposedCell },
+      ], findings.slice(0, 25)),
+      el("p", {}, el("a", { href: `#/findings?device=${d.id}` }, `All findings of this device →`)),
+    ]));
 
   const cf = el("input", { type: "search", placeholder: "Filter packages …" });
   const cwrap = el("div");
