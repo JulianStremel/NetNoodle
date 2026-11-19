@@ -1,0 +1,17 @@
+# Optional helper for nn-agent. Only members of the group nn-agent can connect.
+# Each connection starts one nn-agent-helper@.service, which prints the
+# programs of the listening sockets and exits.
+[Unit]
+Description=netnoodle agent helper socket
+
+[Socket]
+ListenStream=/run/nn-agent-helper.sock
+Accept=yes
+SocketUser=root
+SocketGroup=nn-agent
+SocketMode=0660
+MaxConnections=4
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

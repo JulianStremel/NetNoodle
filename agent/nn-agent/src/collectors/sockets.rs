@@ -1,9 +1,9 @@
 //! `sockets`: listening TCP and UDP sockets, with the program that owns each.
 //!
 //! The socket tables in /proc/net are readable by every user. The owning
-//! process is found through /proc/<pid>/fd, which an unprivileged user can
-//! read only for its own processes.
+//! program is found as described in [`super::sockowner`].
 
+use super::sockowner::{self, Owner};
 use crate::collector::{Access, Collector, Contribution, Ctx};
 use nn_proto::{Confidence, Service};
 use std::collections::{BTreeMap, HashMap};
@@ -81,35 +81,8 @@ fn exposure(addr: &str) -> u8 {
     }
 }
 
-/// Maps socket inodes to process IDs through /proc/<pid>/fd links.
-fn inode_owners(ctx: &Ctx) -> HashMap<u64, u32> {
-    let mut m = HashMap::new();
-    let Ok(rd) = std::fs::read_dir(ctx.path("/proc")) else {
-        return m;
-    };
-    for e in rd.flatten() {
-        let Ok(pid) = e.file_name().to_string_lossy().parse::<u32>() else {
-            continue;
-        };
-        let Ok(fds) = std::fs::read_dir(e.path().join("fd")) else {
-            continue; // other users' processes: permission denied
-        };
-        for fd in fds.flatten() {
-            if let Ok(t) = std::fs::read_link(fd.path()) {
-                let t = t.to_string_lossy();
-                if let Some(n) = t.strip_prefix("socket:[").and_then(|r| r.strip_suffix(']')) {
-                    if let Ok(n) = n.parse() {
-                        m.entry(n).or_insert(pid);
-                    }
-                }
-            }
-        }
-    }
-    m
-}
-
 /// The ephemeral port range; UDP sockets in it are clients, not services.
-fn ephemeral(ctx: &Ctx) -> (u16, u16) {
+pub fn ephemeral(ctx: &Ctx) -> (u16, u16) {
     std::fs::read_to_string(ctx.path("/proc/sys/net/ipv4/ip_local_port_range"))
         .ok()
         .and_then(|s| {
@@ -137,6 +110,74 @@ pub fn dedupe(socks: Vec<Sock>, eph: (u16, u16)) -> Vec<Sock> {
     best.into_values().collect()
 }
 
+/// All listening sockets from the /proc/net tables (before deduplication).
+pub fn listening(ctx: &Ctx) -> Result<Vec<Sock>, String> {
+    let mut socks = Vec::new();
+    let mut read_any = false;
+    for (file, proto) in [
+        ("/proc/net/tcp", "tcp"),
+        ("/proc/net/tcp6", "tcp"),
+        ("/proc/net/udp", "udp"),
+        ("/proc/net/udp6", "udp"),
+    ] {
+        if let Ok(s) = std::fs::read_to_string(ctx.path(file)) {
+            read_any = true;
+            socks.extend(parse_table(&s, proto));
+        }
+    }
+    if read_any {
+        Ok(socks)
+    } else {
+        Err("no socket tables in /proc/net".into())
+    }
+}
+
+/// Finds the owners of the given socket inodes with the least privilege
+/// that works. Notes on failed steps go to `notes`.
+fn owners(ctx: &Ctx, inodes: &[u64], notes: &mut Vec<String>) -> HashMap<u64, Owner> {
+    let mut out: HashMap<u64, Owner> = HashMap::new();
+    let fd = sockowner::fd_owners(ctx);
+    for &i in inodes {
+        if let Some(&pid) = fd.get(&i) {
+            out.insert(i, sockowner::owner_of_pid(ctx, i, pid));
+        }
+    }
+    let missing = |out: &HashMap<u64, Owner>| -> Vec<u64> {
+        inodes
+            .iter()
+            .copied()
+            .filter(|i| !out.contains_key(i))
+            .collect()
+    };
+    if !ctx.is_live() || missing(&out).is_empty() {
+        return out;
+    }
+    if let Some(h) = ctx.helper.as_ref().filter(|h| h.exists()) {
+        match sockowner::from_helper(h) {
+            Ok(list) => {
+                for o in list {
+                    if inodes.contains(&o.inode) {
+                        out.entry(o.inode).or_insert(o);
+                    }
+                }
+            }
+            Err(e) => notes.push(e),
+        }
+    }
+    let rest = missing(&out);
+    if !rest.is_empty() {
+        match sockowner::by_cgroup(ctx, &rest) {
+            Ok(m) => {
+                for (k, v) in m {
+                    out.entry(k).or_insert(v);
+                }
+            }
+            Err(e) => notes.push(e),
+        }
+    }
+    out
+}
+
 impl Collector for Sockets {
     fn name(&self) -> &'static str {
         "sockets"
@@ -150,58 +191,52 @@ impl Collector for Sockets {
                 "/proc/net/udp",
                 "/proc/net/udp6",
                 "/proc/sys/net/ipv4/ip_local_port_range",
-                "/proc/<pid>/fd/",
+                "/proc/<pid>/fd/ (own processes)",
                 "/proc/<pid>/comm",
-                "/proc/<pid>/exe",
+                "/proc/<pid>/exe (own processes)",
+                "/sys/fs/cgroup/ (directory names, cgroup.procs)",
             ],
-            privileged: "program names of sockets owned by other users (needs root or CAP_SYS_PTRACE + CAP_DAC_READ_SEARCH)",
-            ..Default::default()
+            sockets: vec![
+                "netlink sock_diag (listening sockets, read only)",
+                "/run/nn-agent-helper.sock (optional helper)",
+            ],
+            execs: vec!["systemctl show"],
+            privileged: "programs of other users that run outside a systemd service or container (install nn-agent-helper)",
         }
     }
 
     fn collect(&self, ctx: &Ctx) -> Result<Contribution, String> {
-        let mut socks = Vec::new();
-        let mut read_any = false;
-        for (file, proto) in [
-            ("/proc/net/tcp", "tcp"),
-            ("/proc/net/tcp6", "tcp"),
-            ("/proc/net/udp", "udp"),
-            ("/proc/net/udp6", "udp"),
-        ] {
-            if let Ok(s) = std::fs::read_to_string(ctx.path(file)) {
-                read_any = true;
-                socks.extend(parse_table(&s, proto));
-            }
-        }
-        if !read_any {
-            return Err("no socket tables in /proc/net".into());
-        }
-        let socks = dedupe(socks, ephemeral(ctx));
-        let owners = inode_owners(ctx);
+        let socks = dedupe(listening(ctx)?, ephemeral(ctx));
+        let inodes: Vec<u64> = socks.iter().map(|s| s.inode).collect();
+        let mut notes = Vec::new();
+        let owners = owners(ctx, &inodes, &mut notes);
         let mut c = Contribution::default();
+        let mut unknown = 0;
         for s in socks {
-            let mut svc = Service {
+            let o = owners.get(&s.inode);
+            if o.is_none() {
+                unknown += 1;
+            }
+            c.host.services.push(Service {
                 port: s.port,
                 proto: s.proto.into(),
                 address: s.addr,
+                process: o.map(|o| o.comm.clone()).unwrap_or_default(),
                 confidence: Some(Confidence::High),
                 ..Default::default()
-            };
-            let mut exe = String::new();
-            if let Some(pid) = owners.get(&s.inode) {
-                let base = format!("/proc/{pid}");
-                svc.process = std::fs::read_to_string(ctx.path(&format!("{base}/comm")))
-                    .map(|s| s.trim().to_string())
-                    .unwrap_or_default();
-                if let Ok(p) = std::fs::read_link(ctx.path(&format!("{base}/exe"))) {
-                    exe = p
-                        .to_string_lossy()
-                        .trim_end_matches(" (deleted)")
-                        .to_string();
-                }
-            }
-            c.host.services.push(svc);
-            c.service_exes.push(exe);
+            });
+            c.service_exes
+                .push(o.map(|o| o.exe.clone()).unwrap_or_default());
+        }
+        if unknown > 0 {
+            c.host
+                .attributes
+                .insert("sockets.unknown_owner".into(), unknown.to_string());
+        }
+        if !notes.is_empty() {
+            c.host
+                .attributes
+                .insert("sockets.notes".into(), notes.join("; "));
         }
         Ok(c)
     }

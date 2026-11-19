@@ -6,7 +6,8 @@ mod dpkg;
 mod interfaces;
 mod os;
 mod rpm;
-mod sockets;
+pub mod sockets;
+pub mod sockowner;
 mod util;
 
 use crate::collector::Collector;
@@ -25,9 +26,9 @@ pub fn all() -> Vec<Box<dyn Collector>> {
 
 #[cfg(test)]
 pub(crate) fn testctx(name: &str) -> crate::collector::Ctx {
-    crate::collector::Ctx {
-        root: std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+    crate::collector::Ctx::new(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("testdata")
             .join(name),
-    }
+    )
 }

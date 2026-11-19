@@ -2,7 +2,7 @@
 # Images for the Go parts of netnoodle.
 #   docker build --target server -t netnoodle/server .
 #   docker build --target scan   -t netnoodle/scan .
-#   docker build --target agent --output bin/linux .   (static nn-agent for Linux x86_64)
+#   docker build --target agent --output bin/linux .   (static nn-agent + nn-agent-helper for Linux x86_64)
 # The Rust agent and the host actor run on the host itself, not in a container.
 
 FROM golang:1.26-alpine AS build
@@ -34,12 +34,19 @@ VOLUME /var/lib/nn-scan
 ENTRYPOINT ["/usr/local/bin/nn-scan"]
 CMD ["run", "-config", "/etc/netnoodle/nn-scan.json"]
 
-# nn-agent: static Linux binary (musl). Export it with --output; it is not a service image.
-FROM rust:1-alpine AS agent-build
-RUN apk add --no-cache musl-dev
+# nn-agent and nn-agent-helper: static Linux binaries (musl).
+# Export them with --output; this is not a service image.
+FROM rust:1-alpine AS agent-base
+RUN apk add --no-cache musl-dev && rustup component add clippy
 WORKDIR /src
 COPY agent/ ./
-RUN cargo build --release --locked -p nn-agent
+
+# Linux lint and tests. scripts/check.sh runs this stage when Docker is present.
+FROM agent-base AS agent-check
+RUN --mount=type=cache,target=/usr/local/cargo/registry     --mount=type=cache,target=/src/target     cargo clippy --locked --all-targets -q -- -D warnings && cargo test --locked -q
+
+FROM agent-base AS agent-build
+RUN --mount=type=cache,target=/usr/local/cargo/registry     --mount=type=cache,target=/src/target     cargo build --release --locked -p nn-agent  && mkdir /out && cp target/release/nn-agent target/release/nn-agent-helper /out/
 
 FROM scratch AS agent
-COPY --from=agent-build /src/target/release/nn-agent /nn-agent
+COPY --from=agent-build /out/ /

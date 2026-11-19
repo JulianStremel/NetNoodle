@@ -133,7 +133,7 @@ To test a scan without a server, run `bin/nn-scan scan -cidr 192.168.1.0/24`.
 
 `nn-agent` operates on Linux x86_64. It only reads data. It does not listen on a network port.
 
-1. Build the static binary (Docker is necessary):
+1. Build the static binaries (Docker is necessary):
 
    ```sh
    docker build --target agent --output bin/linux .
@@ -171,8 +171,26 @@ Refer to [deploy/nn-agent.example.json](deploy/nn-agent.example.json).
 To see the files, sockets and programs that the agent uses, run `nn-agent scope`.
 To see a report without sending it, run `nn-agent collect`.
 
-> **Note:** As a user without root permissions, the agent cannot see the program of a socket that belongs to a different user. The service then shows no package.
-> To give this data, read the comments in `deploy/nn-agent.service`.
+The agent has no root permissions and no capabilities.
+For each listening socket, it finds the program and its package:
+
+- For programs of systemd services and containers, the agent needs no permissions. This needs Linux 5.9 or later.
+- For other programs of other users, install the optional helper. Do the procedure that follows.
+
+Procedure: install the helper (optional)
+
+1. Copy `bin/linux/nn-agent-helper` to `/usr/local/bin/nn-agent-helper`. Make it executable.
+2. Install the units:
+
+   ```sh
+   cp deploy/nn-agent-helper.socket deploy/nn-agent-helper@.service /etc/systemd/system/
+   systemctl daemon-reload
+   systemctl enable --now nn-agent-helper.socket
+   ```
+
+The helper is a separate program with two capabilities: `CAP_SYS_PTRACE` and `CAP_DAC_READ_SEARCH`.
+It has no input. It only gives the programs of listening sockets.
+Only members of the group `nn-agent` can connect to it. The agent itself keeps no capabilities.
 
 ## Procedure: import from UniFi
 

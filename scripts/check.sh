@@ -31,4 +31,11 @@ echo "== rust: format, lint, test, build"
   cargo build -q
 )
 
+if [ -z "${NN_SKIP_DOCKER:-}" ] && command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  echo "== rust (linux): clippy, test in Docker"
+  docker build -q --target agent-check . >/dev/null
+else
+  echo "== rust (linux): SKIPPED (no Docker; set up Docker or run on Linux)"
+fi
+
 echo "ALL CHECKS PASSED"

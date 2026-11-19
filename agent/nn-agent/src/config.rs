@@ -6,6 +6,7 @@ use std::time::Duration;
 
 pub const DEFAULT_CONFIG: &str = "/etc/nn-agent/config.json";
 pub const DEFAULT_CREDENTIALS: &str = "/var/lib/nn-agent/credentials.json";
+pub const DEFAULT_HELPER: &str = "/run/nn-agent-helper.sock";
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -18,6 +19,9 @@ pub struct Config {
     pub collectors: Option<Vec<String>>,
     /// Root of the file system to read. Default "/".
     pub root: Option<PathBuf>,
+    /// Unix socket of the optional helper service. Default
+    /// "/run/nn-agent-helper.sock" (used only if it exists). "" disables it.
+    pub socket_helper: Option<PathBuf>,
 }
 
 impl Config {
@@ -38,6 +42,17 @@ impl Config {
 
     pub fn root(&self) -> PathBuf {
         self.root.clone().unwrap_or_else(|| PathBuf::from("/"))
+    }
+
+    /// The collector context for this config. `root` overrides the config.
+    pub fn ctx(&self, root: Option<PathBuf>) -> crate::collector::Ctx {
+        let mut ctx = crate::collector::Ctx::new(root.unwrap_or_else(|| self.root()));
+        ctx.helper = match &self.socket_helper {
+            Some(p) if p.as_os_str().is_empty() => None,
+            Some(p) => Some(p.clone()),
+            None => Some(PathBuf::from(DEFAULT_HELPER)),
+        };
+        ctx
     }
 
     pub fn interval(&self) -> Result<Duration, String> {

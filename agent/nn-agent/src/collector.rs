@@ -27,9 +27,14 @@ pub struct Access {
 pub struct Ctx {
     /// Root of the file system to read (normally "/"). Tests point it at fixtures.
     pub root: PathBuf,
+    /// Unix socket of the optional `nn-agent-helper` service.
+    pub helper: Option<PathBuf>,
 }
 
 impl Ctx {
+    pub fn new(root: PathBuf) -> Self {
+        Ctx { root, helper: None }
+    }
     /// Maps an absolute path like "/etc/os-release" below the root.
     pub fn path(&self, abs: &str) -> PathBuf {
         self.root.join(abs.trim_start_matches('/'))

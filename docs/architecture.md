@@ -89,6 +89,10 @@ Collectors that need more permissions are optional.
 - The agent sends one top-level entity for its host. Each report contains all packages and services (`complete: true`). The server then removes data that the report does not contain.
 - If a collector fails, the report is not complete. The server then keeps the earlier data. The attribute `agent.errors` shows the failure.
 - The `sockets` collector finds the program of each listening socket. The package collectors find the package that owns the program. The service then refers to the package URL.
+- To find the program of a socket, the agent uses the first method that operates:
+  1. `/proc/<pid>/fd` of its own processes (all processes if it operates as root).
+  2. The optional helper service `nn-agent-helper`. Only this small program has the capabilities `CAP_SYS_PTRACE` and `CAP_DAC_READ_SEARCH`. It has no input and it cannot use `ptrace`.
+  3. Without permissions: netlink `sock_diag` gives the cgroup of the socket. The cgroup gives the systemd unit or the container. `systemctl show` gives the program of the unit.
 - Package URLs use the qualifiers `arch`, `distro` and `upstream` (the source package). The matcher uses `upstream` for Debian and Ubuntu.
 
 ### 3.4 Inventory and deduplication

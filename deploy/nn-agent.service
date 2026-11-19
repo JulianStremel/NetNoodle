@@ -1,7 +1,10 @@
 # systemd unit for nn-agent. Install: see README, "Procedure: install the agent".
+# The agent has no capabilities. It finds the programs of systemd services
+# and containers without privileges. For other programs, install the
+# optional helper (nn-agent-helper.socket); the agent then connects to it.
 [Unit]
 Description=netnoodle agent (read-only inventory reports)
-After=network-online.target
+After=network-online.target nn-agent-helper.socket
 Wants=network-online.target
 
 [Service]
@@ -20,19 +23,19 @@ PrivateTmp=yes
 PrivateDevices=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
+ProtectKernelLogs=yes
 ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
 SystemCallArchitectures=native
-ReadOnlyPaths=/
+SystemCallFilter=@system-service
 ReadWritePaths=/var/lib/nn-agent
-
-# Optional: let the sockets collector see the programs of other users.
-# Uncomment both lines (and remove the empty CapabilityBoundingSet= above).
-#AmbientCapabilities=CAP_SYS_PTRACE CAP_DAC_READ_SEARCH
-#CapabilityBoundingSet=CAP_SYS_PTRACE CAP_DAC_READ_SEARCH
 
 [Install]
 WantedBy=multi-user.target

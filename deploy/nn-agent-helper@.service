@@ -1,0 +1,46 @@
+# One run of nn-agent-helper per connection on /run/nn-agent-helper.sock.
+# The helper needs exactly two capabilities, to read /proc/<pid>/fd and
+# /proc/<pid>/exe of other users. Everything else is locked down.
+[Unit]
+Description=netnoodle agent helper (programs of listening sockets)
+
+[Service]
+ExecStart=/usr/local/bin/nn-agent-helper
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+RuntimeMaxSec=30
+
+DynamicUser=yes
+AmbientCapabilities=CAP_SYS_PTRACE CAP_DAC_READ_SEARCH
+CapabilityBoundingSet=CAP_SYS_PTRACE CAP_DAC_READ_SEARCH
+NoNewPrivileges=yes
+
+# CAP_SYS_PTRACE is needed for the /proc access checks only. The helper
+# cannot attach to processes: these system calls are blocked.
+SystemCallFilter=@system-service
+SystemCallFilter=~ptrace process_vm_readv process_vm_writev
+SystemCallArchitectures=native
+
+# CAP_DAC_READ_SEARCH could read any file. Hide what the helper never needs.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+InaccessiblePaths=-/etc/shadow -/etc/gshadow -/etc/ssh -/root -/var/lib -/srv
+
+# No network. The helper writes only to the socket that systemd gives it.
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes

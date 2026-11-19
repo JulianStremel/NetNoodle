@@ -2,15 +2,10 @@
 //! sends it to nn-server as a v1 Observation. The agent never listens on a
 //! port and never executes commands from the server.
 
-mod client;
-mod collector;
-mod collectors;
-mod config;
-mod report;
-
 use clap::{Parser, Subcommand};
-use collector::{Collector, Ctx};
-use config::Config;
+use nn_agent::collector::Collector;
+use nn_agent::config::{self, Config};
+use nn_agent::{client, collectors, report};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -98,7 +93,7 @@ fn send_once(
     creds: &client::Credentials,
     cols: &[Box<dyn Collector>],
 ) -> Result<(), String> {
-    let ctx = Ctx { root: cfg.root() };
+    let ctx = cfg.ctx(None);
     let r = report::collect(&ctx, cols);
     for e in &r.errors {
         eprintln!("nn-agent: collector {e}");
@@ -156,9 +151,7 @@ fn run(cli: Cli) -> Result<(), String> {
         }
         Cmd::Collect { root } => {
             let cols = enabled(&cfg)?;
-            let ctx = Ctx {
-                root: root.unwrap_or_else(|| cfg.root()),
-            };
+            let ctx = cfg.ctx(root);
             let r = report::collect(&ctx, &cols);
             let obs = report::observation(r, "local");
             println!(
