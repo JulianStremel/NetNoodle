@@ -60,5 +60,22 @@ func Client(fingerprint string, insecure bool, timeout time.Duration) (*http.Cli
 		return nil, err
 	}
 	tr := &http.Transport{TLSClientConfig: cfg, Proxy: http.ProxyFromEnvironment, MaxIdleConns: 4, IdleConnTimeout: time.Minute}
-	return &http.Client{Transport: tr, Timeout: timeout}, nil
+	// A pinned peer never needs a redirect. Following one could leave the
+	// pinned host or send credentials elsewhere.
+	return &http.Client{Transport: tr, Timeout: timeout, CheckRedirect: NoRedirects}, nil
+}
+
+// NoRedirects is an http.Client CheckRedirect that never follows redirects.
+func NoRedirects(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+// HTTPSRedirects follows at most 3 redirects, and only to https URLs.
+// Use it for public feeds that move their files (no credentials).
+func HTTPSRedirects(req *http.Request, via []*http.Request) error {
+	if len(via) >= 3 {
+		return errors.New("too many redirects")
+	}
+	if req.URL.Scheme != "https" {
+		return fmt.Errorf("redirect to non-https URL %s refused", req.URL.Redacted())
+	}
+	return nil
 }

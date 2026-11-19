@@ -30,7 +30,7 @@ func TestQueryFor(t *testing.T) {
 			Query{"Ubuntu:24.10", "openssl", "3.3.1-2ubuntu2"}, true},
 		{"pkg:apk/alpine/libcrypto3@3.1.4-r5?arch=x86_64&distro=alpine-3.19.1&upstream=openssl", "",
 			Query{"Alpine:v3.19", "openssl", "3.1.4-r5"}, true},
-		{"pkg:rpm/rocky/openssl-libs@3.0.7-24.el9?arch=x86_64&distro=rocky-9.3&epoch=1", "1:3.0.7-24.el9",
+		{"pkg:rpm/rocky/openssl-libs@3.0.7-24.el9?arch=x86_64&distro=rocky-9.3&epoch=1", "0:999999-1",
 			Query{"Rocky Linux:9", "openssl-libs", "1:3.0.7-24.el9"}, true},
 		{"pkg:rpm/fedora/bash@5.2-1?distro=fedora-40", "", Query{}, false},
 		{"pkg:generic/ubiquiti/U7PG2@6.6.55", "", Query{}, false},

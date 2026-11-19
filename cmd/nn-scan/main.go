@@ -71,10 +71,13 @@ func cmdEnroll(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("enroll", flag.ExitOnError)
 	server := fs.String("server", "", "server URL, e.g. https://10.0.0.2:7443")
 	fp := fs.String("fingerprint", "", "SHA-256 fingerprint of the server certificate")
-	token := fs.String("token", "", "join token")
+	token := fs.String("token", "", "join token (better: set NN_JOIN_TOKEN, so it is not visible in the process list)")
 	name := fs.String("name", "", "peer name (if the join token has no fixed name)")
 	out := fs.String("creds", defaultCreds, "where to write the credentials")
 	fs.Parse(args)
+	if *token == "" {
+		*token = os.Getenv("NN_JOIN_TOKEN")
+	}
 	if *server == "" || *fp == "" || *token == "" {
 		return errors.New("-server, -fingerprint and -token are required")
 	}

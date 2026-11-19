@@ -79,6 +79,14 @@ type Result struct {
 // Ingest normalizes the observation and applies it in one transaction.
 // raw is the original payload; it is kept for audit and debugging.
 func Ingest(ctx context.Context, st Store, obs proto.Observation, raw []byte, now time.Time) (Result, error) {
+	return IngestAs(ctx, st, obs, raw, now, "")
+}
+
+// IngestAs is Ingest for an observation of agent peer `agent` (empty for a
+// source). The caller must have applied PrepareAgent. An agent report
+// changes only the agent's own device: it never merges devices and never
+// takes a strong identifier from another device.
+func IngestAs(ctx context.Context, st Store, obs proto.Observation, raw []byte, now time.Time, agent string) (Result, error) {
 	var res Result
 	if obs.ObservedAt.IsZero() || obs.ObservedAt.After(now.Add(5*time.Minute)) {
 		obs.ObservedAt = now
@@ -90,7 +98,7 @@ func Ingest(ctx context.Context, st Store, obs proto.Observation, raw []byte, no
 				return err
 			}
 		}
-		r := &resolver{tx: tx, obs: &obs, res: &res}
+		r := &resolver{tx: tx, obs: &obs, res: &res, agent: agent}
 		for i := range obs.Entities {
 			e := &obs.Entities[i]
 			if !NormalizeEntity(e) {
@@ -107,9 +115,10 @@ func Ingest(ctx context.Context, st Store, obs proto.Observation, raw []byte, no
 }
 
 type resolver struct {
-	tx  Tx
-	obs *proto.Observation
-	res *Result
+	tx    Tx
+	obs   *proto.Observation
+	res   *Result
+	agent string // agent peer name; "" for sources
 }
 
 func (r *resolver) apply(e *proto.Entity, parentID int64) (int64, error) {
@@ -123,7 +132,13 @@ func (r *resolver) apply(e *proto.Entity, parentID int64) (int64, error) {
 		parentID = pid
 	}
 
-	dev, err := r.resolve(e)
+	var dev int64
+	var err error
+	if r.agent != "" {
+		dev, err = r.resolveAgent(e)
+	} else {
+		dev, err = r.resolve(e)
+	}
 	if err != nil {
 		return 0, err
 	}
@@ -151,6 +166,16 @@ func (r *resolver) apply(e *proto.Entity, parentID int64) (int64, error) {
 	}
 
 	for _, id := range e.Identifiers {
+		if r.agent != "" && id.Strength == proto.Strong {
+			// An agent must not take a strong identifier from another device.
+			owner, ok, err := tx.Lookup(id.Kind, id.Value)
+			if err != nil {
+				return 0, err
+			}
+			if ok && owner != dev {
+				continue
+			}
+		}
 		if err := tx.PutIdentifier(dev, id, r.obs.Source, at); err != nil {
 			return 0, err
 		}

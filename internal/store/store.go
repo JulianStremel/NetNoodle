@@ -57,6 +57,8 @@ type Event struct {
 type Events interface {
 	AddEvent(ctx context.Context, e Event) error
 	ListEvents(ctx context.Context, limit int) ([]Event, error)
+	// PurgeEvents deletes events older than before.
+	PurgeEvents(ctx context.Context, before time.Time) error
 }
 
 // Peer is a program that talks to the server: a source, an agent or an actor.

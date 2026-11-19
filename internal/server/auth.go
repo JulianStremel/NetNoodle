@@ -138,16 +138,71 @@ func (l *loginLimiter) prune(ip string, now time.Time) []time.Time {
 	return ts
 }
 
-func (l *loginLimiter) allowed(ip string, now time.Time) bool {
+// maxTrackedIPs bounds the limiter's memory (for example with rotating
+// IPv6 addresses). When it is reached, old entries are dropped.
+const maxTrackedIPs = 100000
+
+// reserve counts one attempt for ip before the check runs. It returns false
+// if the limit is reached. Call release after a successful attempt.
+func (l *loginLimiter) reserve(ip string, now time.Time) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return len(l.prune(ip, now)) < l.maxFails
+	ts := l.prune(ip, now)
+	if len(ts) >= l.maxFails {
+		return false
+	}
+	if len(l.fails) >= maxTrackedIPs {
+		for k := range l.fails {
+			l.prune(k, now)
+		}
+		if len(l.fails) >= maxTrackedIPs {
+			l.fails = map[string][]time.Time{}
+		}
+	}
+	l.fails[ip] = append(ts, now)
+	return true
 }
 
-func (l *loginLimiter) fail(ip string, now time.Time) {
+// release removes the last reserved attempt of ip (it succeeded).
+func (l *loginLimiter) release(ip string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.fails[ip] = append(l.prune(ip, now), now)
+	if ts := l.fails[ip]; len(ts) > 0 {
+		if len(ts) == 1 {
+			delete(l.fails, ip)
+		} else {
+			l.fails[ip] = ts[:len(ts)-1]
+		}
+	}
+}
+
+// rateLimiter allows n events per window and key.
+type rateLimiter struct {
+	mu     sync.Mutex
+	n      int
+	window time.Duration
+	hits   map[string][]time.Time
+}
+
+func newRateLimiter(n int, window time.Duration) *rateLimiter {
+	return &rateLimiter{n: n, window: window, hits: map[string][]time.Time{}}
+}
+
+func (l *rateLimiter) allow(key string, now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	ts := l.hits[key]
+	i := 0
+	for i < len(ts) && now.Sub(ts[i]) > l.window {
+		i++
+	}
+	ts = ts[i:]
+	if len(ts) >= l.n {
+		l.hits[key] = ts
+		return false
+	}
+	l.hits[key] = append(ts, now)
+	return true
 }
 
 var errBadLogin = errors.New("wrong user name or password")

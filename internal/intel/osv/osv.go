@@ -23,6 +23,7 @@ import (
 	"netnoodle/internal/intel"
 	"netnoodle/internal/proto"
 	"netnoodle/internal/registry"
+	"netnoodle/internal/tlspin"
 )
 
 func init() { intel.Matchers.Register("osv", New) }
@@ -88,7 +89,7 @@ func New(name string, raw json.RawMessage) (intel.Matcher, error) {
 		base:    strings.TrimRight(s.URL, "/"),
 		ttl:     ttl,
 		conc:    s.Concurrency,
-		hc:      &http.Client{Timeout: 60 * time.Second},
+		hc:      &http.Client{Timeout: 60 * time.Second, CheckRedirect: tlspin.NoRedirects},
 		now:     time.Now,
 		queries: map[Query]queryEntry{},
 		vulns:   map[string]vulnEntry{},
@@ -179,7 +180,14 @@ func QueryFor(c proto.Component) (Query, bool) {
 		default:
 			return Query{}, false
 		}
-		q.Version = c.Version // includes the epoch, as OSV compares with rpm rules
+		// Version from the PURL (never the free-form component field), with
+		// the epoch qualifier, as OSV compares with rpm rules.
+		if ep := p.Qualifiers["epoch"]; ep != "" && ep != "0" {
+			if major(ep) == "" {
+				return Query{}, false
+			}
+			q.Version = ep + ":" + p.Version
+		}
 	default:
 		return Query{}, false
 	}
@@ -302,6 +310,7 @@ func (m *Matcher) lookup(ctx context.Context, uniq map[Query]bool) (map[Query][]
 	var todo []Query
 	now := m.now()
 	m.mu.Lock()
+	m.pruneLocked(now)
 	for q := range uniq {
 		if e, ok := m.queries[q]; ok && now.Sub(e.at) < m.ttl {
 			out[q] = e.ids
@@ -372,6 +381,37 @@ func (m *Matcher) batch(ctx context.Context, qs []Query, tokens []string) ([][]i
 		}
 	}
 	return out, nil
+}
+
+// Cache limits. Entries expire after the TTL; above the limits the oldest
+// part of the cache is dropped, so a peer that reports many fake packages
+// cannot grow the server's memory without end.
+const (
+	maxCachedQueries = 200000
+	maxCachedVulns   = 100000
+)
+
+func (m *Matcher) pruneLocked(now time.Time) {
+	if len(m.queries) > maxCachedQueries/2 {
+		for q, e := range m.queries {
+			if now.Sub(e.at) >= m.ttl {
+				delete(m.queries, q)
+			}
+		}
+	}
+	if len(m.vulns) > maxCachedVulns/2 {
+		for id, e := range m.vulns {
+			if now.Sub(e.at) >= m.ttl {
+				delete(m.vulns, id)
+			}
+		}
+	}
+	if len(m.queries) > maxCachedQueries {
+		m.queries = map[Query]queryEntry{}
+	}
+	if len(m.vulns) > maxCachedVulns {
+		m.vulns = map[string]vulnEntry{}
+	}
 }
 
 func (m *Matcher) record(id string) *record {

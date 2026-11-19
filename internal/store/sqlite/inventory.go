@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"sort"
 	"strings"
 	"time"
 
@@ -105,11 +106,30 @@ func (t *invTx) row(id int64) (devRow, error) {
 	return r, notFound(err)
 }
 
+// maxDeviceAttrs limits the attributes of one device. New keys win; old
+// keys that are not in the update are dropped first when the limit is hit.
+const maxDeviceAttrs = 512
+
 func mergeAttrs(oldJSON string, add map[string]string) string {
 	m := map[string]string{}
 	_ = json.Unmarshal([]byte(oldJSON), &m)
 	for k, v := range add {
 		m[k] = v
+	}
+	if len(m) > maxDeviceAttrs {
+		keys := make([]string, 0, len(m))
+		for k := range m {
+			if _, isNew := add[k]; !isNew {
+				keys = append(keys, k)
+			}
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			if len(m) <= maxDeviceAttrs {
+				break
+			}
+			delete(m, k)
+		}
 	}
 	return marshal(m)
 }

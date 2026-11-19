@@ -62,7 +62,7 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ip, now := clientIP(r), s.now()
-	if !s.limiter.allowed(ip, now) {
+	if !s.enrollLim.reserve(ip, now) {
 		writeErr(w, http.StatusTooManyRequests, "too many failed attempts, wait a few minutes")
 		return
 	}
@@ -70,11 +70,14 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "name must match "+peerNameRE.String())
 		return
 	}
+	if s.reserved[strings.ToLower(req.Name)] {
+		writeErr(w, http.StatusConflict, "this name is reserved")
+		return
+	}
 	tok := RandomToken(32)
 	p, err := s.st.Enroll(r.Context(), HashToken(req.JoinToken), req.Name, HashToken(tok), now)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
-		s.limiter.fail(ip, now)
 		writeErr(w, http.StatusUnauthorized, "invalid or expired join token")
 		return
 	case errors.Is(err, store.ErrConflict):
@@ -84,6 +87,7 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	s.enrollLim.release(ip)
 	s.event(r.Context(), "peer.enrolled", p.Name, "peer "+p.Name+" enrolled as "+p.Role+" from "+ip)
 	writeJSON(w, http.StatusOK, map[string]string{"name": p.Name, "role": p.Role, "token": tok})
 }
@@ -153,6 +157,10 @@ func (s *Server) handleCreateJoinToken(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Name != "" && !peerNameRE.MatchString(req.Name) {
 		writeErr(w, http.StatusBadRequest, "name must match "+peerNameRE.String())
+		return
+	}
+	if s.reserved[strings.ToLower(req.Name)] {
+		writeErr(w, http.StatusBadRequest, "this name is reserved (an in-process source uses it)")
 		return
 	}
 	if req.Uses < 1 {

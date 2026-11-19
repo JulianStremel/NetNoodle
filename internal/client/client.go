@@ -40,6 +40,9 @@ func New(c Credentials) (*Client, error) {
 	if c.Fingerprint == "" {
 		return nil, errors.New("server fingerprint is required")
 	}
+	if !strings.HasPrefix(strings.ToLower(c.Server), "https://") {
+		return nil, errors.New("server URL must start with https://")
+	}
 	hc, err := tlspin.Client(c.Fingerprint, false, 2*time.Minute)
 	if err != nil {
 		return nil, err
@@ -74,7 +77,11 @@ func SaveCredentials(path string, c Credentials) error {
 		return err
 	}
 	b, _ := json.MarshalIndent(c, "", "  ")
-	return os.WriteFile(path, b, 0o600)
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		return err
+	}
+	// WriteFile keeps the mode of an existing file; make sure it is private.
+	return os.Chmod(path, 0o600)
 }
 
 // LoadCredentials reads a credentials file.

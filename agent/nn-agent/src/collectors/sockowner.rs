@@ -178,9 +178,24 @@ pub fn diag_parse(buf: &[u8], out: &mut HashMap<u64, u64>) -> Result<bool, Strin
     Ok(false)
 }
 
-/// The systemd service unit in a cgroup path, e.g. "system.slice/nginx.service".
+/// The system service unit in a cgroup path, e.g. "system.slice/nginx.service".
+/// Only units of the system manager count: a user could name a unit of
+/// their own user manager like a system unit, and `systemctl show` would
+/// then describe the system unit.
 pub fn unit_of(cgroup: &str) -> Option<&str> {
-    cgroup.rsplit('/').find(|c| c.ends_with(".service"))
+    let parts: Vec<&str> = cgroup.split('/').collect();
+    let start = parts.iter().position(|c| *c == "system.slice")?;
+    if parts
+        .iter()
+        .any(|c| c.starts_with("user@") || *c == "user.slice")
+    {
+        return None;
+    }
+    parts[start + 1..]
+        .iter()
+        .rev()
+        .find(|c| c.ends_with(".service"))
+        .copied()
 }
 
 /// The container ID (12 characters) in a cgroup path of Docker, Podman or containerd.
@@ -464,8 +479,12 @@ mod tests {
     fn cgroup_names() {
         assert_eq!(unit_of("system.slice/nginx.service"), Some("nginx.service"));
         assert_eq!(
-            unit_of("user.slice/user-1000.slice/user@1000.service/app.slice/foo.service"),
-            Some("foo.service")
+            unit_of("user.slice/user-1000.slice/user@1000.service/app.slice/sshd.service"),
+            None
+        );
+        assert_eq!(
+            unit_of("docker/2869f5f821df/system.slice/nginx.service"),
+            Some("nginx.service")
         );
         assert_eq!(unit_of("user.slice/user-1000.slice/session-3.scope"), None);
         let id = "4f9c2a1b3d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8";

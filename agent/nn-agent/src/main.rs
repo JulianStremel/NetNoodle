@@ -36,8 +36,9 @@ enum Cmd {
         /// SHA-256 fingerprint of the server certificate.
         #[arg(long)]
         fingerprint: String,
-        /// Join token from the Peers page.
-        #[arg(long)]
+        /// Join token from the Peers page. Prefer the environment variable,
+        /// so the token is not visible in the process list.
+        #[arg(long, env = "NN_JOIN_TOKEN", hide_env_values = true)]
         token: String,
         /// Peer name. Default: the host name.
         #[arg(long)]

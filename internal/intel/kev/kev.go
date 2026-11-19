@@ -12,6 +12,7 @@ import (
 
 	"netnoodle/internal/intel"
 	"netnoodle/internal/registry"
+	"netnoodle/internal/tlspin"
 )
 
 const defaultURL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
@@ -51,7 +52,7 @@ func New(name string, raw json.RawMessage) (intel.Enricher, error) {
 	if s.URL == "" {
 		s.URL = defaultURL
 	}
-	return &enricher{name: name, url: s.URL, c: &http.Client{Timeout: 60 * time.Second}}, nil
+	return &enricher{name: name, url: s.URL, c: &http.Client{Timeout: 60 * time.Second, CheckRedirect: tlspin.HTTPSRedirects}}, nil
 }
 
 func (e *enricher) Name() string { return e.name }

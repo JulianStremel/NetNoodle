@@ -18,9 +18,18 @@ import (
 
 	"netnoodle/internal/intel"
 	"netnoodle/internal/registry"
+	"netnoodle/internal/tlspin"
 )
 
 const defaultURL = "https://epss.empiricalsecurity.com/epss_scores-current.csv.gz"
+
+// Limits against a broken or hostile feed: the real file is about 15 MB
+// uncompressed with about 300k rows.
+const (
+	maxDownload     = 64 << 20
+	maxDecompressed = 256 << 20
+	maxRows         = 2000000
+)
 
 func init() { intel.Enrichers.Register("epss", New) }
 
@@ -51,7 +60,7 @@ func New(name string, raw json.RawMessage) (intel.Enricher, error) {
 	if s.URL == "" {
 		s.URL = defaultURL
 	}
-	return &enricher{name: name, url: s.URL, c: &http.Client{Timeout: 120 * time.Second}}, nil
+	return &enricher{name: name, url: s.URL, c: &http.Client{Timeout: 120 * time.Second, CheckRedirect: tlspin.HTTPSRedirects}}, nil
 }
 
 func (e *enricher) Name() string { return e.name }
@@ -70,14 +79,14 @@ func (e *enricher) Refresh(ctx context.Context) error {
 	if res.StatusCode/100 != 2 {
 		return fmt.Errorf("epss download returned %s", res.Status)
 	}
-	reader := bufio.NewReader(res.Body)
+	reader := bufio.NewReader(io.LimitReader(res.Body, maxDownload))
 	if magic, _ := reader.Peek(2); len(magic) == 2 && magic[0] == 0x1f && magic[1] == 0x8b {
 		gz, err := gzip.NewReader(reader)
 		if err != nil {
 			return fmt.Errorf("epss gzip: %w", err)
 		}
 		defer gz.Close()
-		reader = bufio.NewReader(gz)
+		reader = bufio.NewReader(io.LimitReader(gz, maxDecompressed))
 	}
 	var date string
 	if first, _ := reader.Peek(1); len(first) == 1 && first[0] == '#' {
@@ -109,6 +118,12 @@ func (e *enricher) Refresh(ctx context.Context) error {
 		}
 		if err != nil {
 			return fmt.Errorf("epss CSV: %w", err)
+		}
+		if len(data) >= maxRows {
+			return fmt.Errorf("epss feed has more than %d rows", maxRows)
+		}
+		if len(row[0]) > 32 {
+			return fmt.Errorf("epss invalid CVE %.40q", row[0])
 		}
 		if !strings.HasPrefix(row[0], "CVE-") || len(row[0]) <= 4 {
 			return fmt.Errorf("epss invalid CVE %q", row[0])

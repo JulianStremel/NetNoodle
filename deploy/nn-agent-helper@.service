@@ -16,10 +16,13 @@ AmbientCapabilities=CAP_SYS_PTRACE CAP_DAC_READ_SEARCH
 CapabilityBoundingSet=CAP_SYS_PTRACE CAP_DAC_READ_SEARCH
 NoNewPrivileges=yes
 
-# CAP_SYS_PTRACE is needed for the /proc access checks only. The helper
-# cannot attach to processes: these system calls are blocked.
+# CAP_SYS_PTRACE is needed for the /proc access checks only. These system
+# calls are blocked, so the helper cannot attach to processes, copy their
+# memory or file descriptors, or open files by handle (which would pass by
+# InaccessiblePaths). Reading /proc/<pid>/mem with read(2) stays possible
+# with the capability; the helper code never does it and reads no input.
 SystemCallFilter=@system-service
-SystemCallFilter=~ptrace process_vm_readv process_vm_writev
+SystemCallFilter=~ptrace process_vm_readv process_vm_writev pidfd_getfd kcmp open_by_handle_at name_to_handle_at
 SystemCallArchitectures=native
 
 # CAP_DAC_READ_SEARCH could read any file. Hide what the helper never needs.

@@ -156,15 +156,24 @@ func (s *DB) UserByName(ctx context.Context, name string) (store.User, error) {
 	return u, nil
 }
 
+// SetPassword changes the password and ends all sessions of the user.
 func (s *DB) SetPassword(ctx context.Context, id int64, passHash []byte) error {
-	r, err := s.db.ExecContext(ctx, `UPDATE users SET pass_hash = ? WHERE id = ?`, passHash, id)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	r, err := tx.ExecContext(ctx, `UPDATE users SET pass_hash = ? WHERE id = ?`, passHash, id)
 	if err != nil {
 		return err
 	}
 	if n, _ := r.RowsAffected(); n == 0 {
 		return store.ErrNotFound
 	}
-	return nil
+	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = ?`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // --- sessions ---
@@ -207,6 +216,12 @@ func (s *DB) AddEvent(ctx context.Context, e store.Event) error {
 	}
 	_, err := s.db.ExecContext(ctx, `INSERT INTO events(at, type, actor, summary, data) VALUES (?, ?, ?, ?, ?)`,
 		ts(e.At), e.Type, e.Actor, e.Summary, e.Data)
+	return err
+}
+
+// PurgeEvents deletes events older than before.
+func (s *DB) PurgeEvents(ctx context.Context, before time.Time) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM events WHERE at < ?`, ts(before))
 	return err
 }
 

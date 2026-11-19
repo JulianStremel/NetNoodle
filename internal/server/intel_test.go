@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"netnoodle/internal/intel"
+	"netnoodle/internal/inventory"
 	"netnoodle/internal/proto"
 	"netnoodle/internal/store"
 	"netnoodle/internal/store/sqlite"
@@ -78,7 +79,10 @@ func TestMatchFlow(t *testing.T) {
 		},
 	}}}
 	raw, _ := json.Marshal(obs)
-	res, err := s.Ingest(ctx, obs, raw)
+	if err := inventory.PrepareAgent(&obs, "web1"); err != nil {
+		t.Fatal(err)
+	}
+	res, err := s.ingestAs(ctx, obs, raw, "web1")
 	if err != nil {
 		t.Fatal(err)
 	}

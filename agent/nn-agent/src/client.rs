@@ -147,6 +147,7 @@ pub fn enroll(
         token: String,
     }
     let server = server.trim_end_matches('/').to_string();
+    require_https(&server)?;
     let r: Resp = http_agent(fingerprint)?
         .post(&format!("{server}/v1/enroll"))
         .send_json(serde_json::json!({"join_token": token, "name": name}))
@@ -162,8 +163,20 @@ pub fn enroll(
     })
 }
 
+/// The fingerprint pin protects only https connections.
+fn require_https(server: &str) -> Result<(), String> {
+    if server.to_ascii_lowercase().starts_with("https://") {
+        Ok(())
+    } else {
+        Err(format!(
+            "server URL must start with https:// (got {server:?})"
+        ))
+    }
+}
+
 /// Sends an observation. Returns the server's summary.
 pub fn post_observation(c: &Credentials, obs: &Observation) -> Result<serde_json::Value, String> {
+    require_https(&c.server)?;
     http_agent(&c.fingerprint)?
         .post(&format!("{}/v1/observations", c.server))
         .set("Authorization", &format!("Bearer {}", c.token))
@@ -189,7 +202,15 @@ pub fn save(path: &Path, c: &Credentials) -> Result<(), String> {
     use std::io::Write;
     opts.open(path)
         .and_then(|mut f| f.write_all(&data))
-        .map_err(|e| format!("{}: {e}", path.display()))
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    // `mode` applies only to new files; make an existing file private too.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+    }
+    Ok(())
 }
 
 /// Reads a credentials file.

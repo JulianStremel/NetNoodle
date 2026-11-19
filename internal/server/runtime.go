@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"netnoodle/internal/notify"
@@ -17,6 +18,20 @@ import (
 type SourceSpec struct {
 	registry.Spec
 	Interval Duration `json:"interval,omitempty"`
+}
+
+// reservedNames are names that peers may not enroll with: the names of the
+// in-process sources (their data is stored under the source name).
+func reservedNames(cfg Config) map[string]bool {
+	m := map[string]bool{"local": true, "server": true}
+	for _, s := range cfg.Sources {
+		n := s.Name
+		if n == "" {
+			n = s.Type
+		}
+		m[strings.ToLower(n)] = true
+	}
+	return m
 }
 
 // event writes an entry to the event log only.
@@ -37,7 +52,16 @@ func (s *Server) emit(ctx context.Context, e notify.Event, actor, data string) {
 		s.log.Error("event", "err", err)
 	}
 	for _, n := range s.notifiers {
+		// At most cap(notifySem) sends run at a time; a burst drops the rest
+		// (they stay in the event log).
+		select {
+		case s.notifySem <- struct{}{}:
+		default:
+			s.log.Warn("notify queue full, event not sent", "notifier", n.Name(), "type", e.Type)
+			continue
+		}
 		go func(n notify.Notifier) {
+			defer func() { <-s.notifySem }()
 			nctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
 			if err := n.Notify(nctx, e); err != nil {
@@ -103,6 +127,9 @@ func (s *Server) pollLoop(ctx context.Context, src source.Source, every time.Dur
 	}
 }
 
+// eventRetention is how long the event log is kept.
+const eventRetention = 90 * 24 * time.Hour
+
 // RunMaintenance purges old raw observations and expired sessions daily.
 func (s *Server) RunMaintenance(ctx context.Context, keep time.Duration) {
 	t := time.NewTicker(time.Hour)
@@ -113,6 +140,7 @@ func (s *Server) RunMaintenance(ctx context.Context, keep time.Duration) {
 			s.log.Warn("purge observations", "err", err)
 		}
 		_ = s.st.PurgeSessions(ctx, now)
+		_ = s.st.PurgeEvents(ctx, now.Add(-eventRetention))
 		select {
 		case <-ctx.Done():
 			return

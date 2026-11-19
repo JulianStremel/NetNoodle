@@ -70,7 +70,8 @@ func TestRefreshAndEnrich(t *testing.T) {
 			if compressed {
 				body = gzipData(t, testCSV)
 			}
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// TLS server: redirects are followed only to https URLs.
+			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method != http.MethodGet || r.UserAgent() != "netnoodle" {
 					t.Errorf("unexpected request: %s, User-Agent %q", r.Method, r.UserAgent())
 				}
@@ -82,6 +83,7 @@ func TestRefreshAndEnrich(t *testing.T) {
 				w.Write(body)
 			}))
 			e := newTestEnricher(t, srv.URL+"/redirect")
+			e.(*enricher).c.Transport = srv.Client().Transport
 			if err := e.Refresh(context.Background()); err != nil {
 				srv.Close()
 				t.Fatal(err)
@@ -247,4 +249,18 @@ func TestConcurrentRefreshAndEnrich(t *testing.T) {
 		})
 	}
 	wg.Wait()
+}
+
+func TestRedirectToHTTPRefused(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/redirect" {
+			http.Redirect(w, r, "/scores", http.StatusFound)
+			return
+		}
+		w.Write([]byte(testCSV))
+	}))
+	defer srv.Close()
+	if err := newTestEnricher(t, srv.URL+"/redirect").Refresh(context.Background()); err == nil {
+		t.Fatal("redirect to http was followed")
+	}
 }

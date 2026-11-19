@@ -156,6 +156,7 @@ To test a scan without a server, run `bin/nn-scan scan -cidr 192.168.1.0/24`.
    ```
 
    The peer name is the host name. To use a different name, add `--name <name>`.
+   Give the join token in the environment variable `NN_JOIN_TOKEN`, as the **Peers** page shows. Then other users cannot see the token in the process list.
 6. Install the service:
 
    ```sh

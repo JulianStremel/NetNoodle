@@ -4,9 +4,9 @@ import { api, el, table, fmtTime, registerView } from "./app.js";
 function enrollHelp(role, token, fingerprint) {
   const server = location.origin;
   const cmd = {
-    source: `nn-scan enroll -server ${server} -fingerprint ${fingerprint} -token ${token} -name <name>`,
-    agent: `nn-agent enroll --server ${server} --fingerprint ${fingerprint} --token ${token}`,
-    actor: `nn-actor enroll -server ${server} -fingerprint ${fingerprint} -token ${token} -name <name>`,
+    source: `NN_JOIN_TOKEN=${token} nn-scan enroll -server ${server} -fingerprint ${fingerprint} -name <name>`,
+    agent: `NN_JOIN_TOKEN=${token} nn-agent enroll --server ${server} --fingerprint ${fingerprint}`,
+    actor: `NN_JOIN_TOKEN=${token} nn-actor enroll -server ${server} -fingerprint ${fingerprint} -name <name>`,
   }[role];
   return el("div", { class: "card" },
     el("h2", {}, "Join token created"),

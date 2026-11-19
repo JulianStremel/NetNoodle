@@ -24,6 +24,11 @@ type Server struct {
 	fingerprint string
 	limiter     *loginLimiter
 	notifiers   []notify.Notifier
+	notifySem   chan struct{}
+	enrollLim   *loginLimiter
+	bcryptSem   chan struct{}
+	peerRate    *rateLimiter
+	reserved    map[string]bool
 	intel       *intelState
 	now         func() time.Time
 }
@@ -37,6 +42,11 @@ func New(cfg Config, st store.Store, ui fs.FS, fingerprint string, log *slog.Log
 		ui:          ui,
 		fingerprint: fingerprint,
 		limiter:     newLoginLimiter(),
+		enrollLim:   newLoginLimiter(),
+		bcryptSem:   make(chan struct{}, 4),
+		notifySem:   make(chan struct{}, 8),
+		peerRate:    newRateLimiter(60, 10*time.Minute),
+		reserved:    reservedNames(cfg),
 		intel:       newIntelState(),
 		now:         time.Now,
 	}
@@ -114,7 +124,15 @@ func jsonOnlyWrites(next http.Handler) http.Handler {
 				writeErr(w, http.StatusUnsupportedMediaType, "content type must be application/json")
 				return
 			}
-			r.Body = http.MaxBytesReader(w, r.Body, 64<<20)
+			// Small bodies and a short read deadline everywhere, except for
+			// observations from authenticated peers. This bounds memory and
+			// stops slow-body (slowloris) requests.
+			limit, deadline := int64(64<<10), 20*time.Second
+			if r.URL.Path == "/v1/observations" {
+				limit, deadline = maxObservation, 5*time.Minute
+			}
+			_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(deadline))
+			r.Body = http.MaxBytesReader(w, r.Body, limit)
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -151,13 +169,24 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	ip := clientIP(r)
 	now := s.now()
-	if !s.limiter.allowed(ip, now) {
+	// Reserve the attempt before the password check, so parallel requests
+	// cannot pass the limit; free it again on success.
+	if !s.limiter.reserve(ip, now) {
 		writeErr(w, http.StatusTooManyRequests, "too many failed logins, wait a few minutes")
 		return
 	}
+	select {
+	case s.bcryptSem <- struct{}{}:
+	case <-time.After(10 * time.Second):
+		writeErr(w, http.StatusServiceUnavailable, "busy, try again")
+		return
+	}
 	u, ok := s.checkLogin(r.Context(), req.User, req.Password)
+	<-s.bcryptSem
+	if ok {
+		s.limiter.release(ip)
+	}
 	if !ok {
-		s.limiter.fail(ip, now)
 		s.event(r.Context(), "login.failed", ip, "failed login for "+truncate(req.User, 64))
 		writeErr(w, http.StatusUnauthorized, errBadLogin.Error())
 		return

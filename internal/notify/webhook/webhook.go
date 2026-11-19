@@ -16,6 +16,7 @@ import (
 
 	"netnoodle/internal/notify"
 	"netnoodle/internal/registry"
+	"netnoodle/internal/tlspin"
 )
 
 func init() {
@@ -54,7 +55,7 @@ func New(name string, raw json.RawMessage) (notify.Notifier, error) {
 	if s.Format != "json" && s.Format != "slack" {
 		return nil, fmt.Errorf("unknown format %q", s.Format)
 	}
-	return &hook{name: name, s: s, c: &http.Client{Timeout: 10 * time.Second}}, nil
+	return &hook{name: name, s: s, c: &http.Client{Timeout: 10 * time.Second, CheckRedirect: tlspin.NoRedirects}}, nil
 }
 
 func (h *hook) Name() string { return h.name }

@@ -57,8 +57,17 @@ netnoodle does these tasks:
 4. The peer sends the peer token as a bearer token in each request.
 
 The server sets the source name of each observation to the name of the peer.
-An agent can send only one top-level entity. The server adds the identifier `agent=<peer name>` to it.
-Thus, an agent cannot report data for a different device.
+Only the server sets identifiers of the kind `agent`. It removes them from all observations and adds `agent=<peer name>` to agent reports.
+
+Rules for agent reports:
+
+- One top-level entity. No children and no parent link (until M4 defines them).
+- The agent identifier decides the device. On the first report, the agent can take over one device that matches its MAC address, IP address or host name, but only if no other agent has that device.
+- An agent report never merges devices. It never moves a strong identifier from a different device.
+
+Sources (scanners, importers) are trusted to describe the network. A source can merge devices that share a strong identifier. Give the role `source` only to programs that you trust.
+
+Limits on each observation: 64 MiB body, 20000 entities, 256 identifiers for each entity, 512 attributes for each device. Each peer can send 60 observations in 10 minutes. Unknown JSON fields are refused.
 
 ### 3.2a Discovery
 
