@@ -19,6 +19,26 @@ function enrollHelp(role, token, fingerprint) {
 async function page(root) {
   const [peers, tokens] = await Promise.all([api("/api/peers"), api("/api/join-tokens")]);
   const out = el("div");
+  const tokensCard = el("div", { class: "card" });
+  const drawTokens = (list) => tokensCard.replaceChildren(el("h2", {}, `Active join tokens (${list.length})`),
+    list.length === 0 ? el("p", { class: "muted" }, "None.") :
+      table([
+        { title: "ID", key: "id" },
+        { title: "Role", key: "role" },
+        { title: "Name", key: "name" },
+        { title: "Uses left", key: "uses_left" },
+        { title: "Expires", render: (t) => fmtTime(t.expires) },
+        {
+          title: "",
+          render: (t) => el("button", {
+            class: "link",
+            onclick: async () => {
+              await api(`/api/join-tokens/${t.id}`, { method: "DELETE", body: {} });
+              drawTokens(await api("/api/join-tokens"));
+            },
+          }, "Revoke"),
+        },
+      ], list));
 
   const role = el("select", {}, ["source", "agent", "actor"].map((r) => el("option", { value: r }, r)));
   const name = el("input", { placeholder: "Fixed name (optional)" });
@@ -35,6 +55,7 @@ async function page(root) {
           body: { role: role.value, name: name.value.trim(), uses: Number(uses.value), hours: Number(hours.value) },
         });
         out.replaceChildren(enrollHelp(role.value, r.token, r.fingerprint));
+        drawTokens(await api("/api/join-tokens"));
       } catch (e) {
         msg.textContent = e.message;
       }
@@ -70,25 +91,8 @@ async function page(root) {
         },
       ], peers)));
 
-  root.append(el("div", { class: "card" }, el("h2", {}, `Active join tokens (${tokens.length})`),
-    tokens.length === 0 ? el("p", { class: "muted" }, "None.") :
-      table([
-        { title: "ID", key: "id" },
-        { title: "Role", key: "role" },
-        { title: "Name", key: "name" },
-        { title: "Uses left", key: "uses_left" },
-        { title: "Expires", render: (t) => fmtTime(t.expires) },
-        {
-          title: "",
-          render: (t) => el("button", {
-            class: "link",
-            onclick: async () => {
-              await api(`/api/join-tokens/${t.id}`, { method: "DELETE", body: {} });
-              location.reload();
-            },
-          }, "Revoke"),
-        },
-      ], tokens)));
+  root.append(tokensCard);
+  drawTokens(tokens);
 }
 
 registerView("peers", "Peers", page);

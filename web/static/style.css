@@ -30,6 +30,9 @@ body {
   color: var(--fg);
   font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
 }
+/* The hidden attribute must win over display rules such as .top { display: flex }. */
+[hidden] { display: none !important; }
+
 .top {
   display: flex;
   align-items: center;
