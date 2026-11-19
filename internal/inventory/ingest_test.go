@@ -22,8 +22,12 @@ func newDB(t *testing.T) *sqlite.DB {
 	return db
 }
 
-func strong(k, v string) proto.Identifier { return proto.Identifier{Kind: k, Value: v, Strength: proto.Strong} }
-func weak(k, v string) proto.Identifier   { return proto.Identifier{Kind: k, Value: v, Strength: proto.Weak} }
+func strong(k, v string) proto.Identifier {
+	return proto.Identifier{Kind: k, Value: v, Strength: proto.Strong}
+}
+func weak(k, v string) proto.Identifier {
+	return proto.Identifier{Kind: k, Value: v, Strength: proto.Weak}
+}
 
 func ingest(t *testing.T, db *sqlite.DB, src string, at time.Time, complete bool, ents ...proto.Entity) inventory.Result {
 	t.Helper()
