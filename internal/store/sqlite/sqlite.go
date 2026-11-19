@@ -103,10 +103,16 @@ func (s *DB) migrate(ctx context.Context) error {
 	return nil
 }
 
-func ts(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
+// tsLayout has a fixed width, so text comparison in SQL equals time order.
+const tsLayout = "2006-01-02T15:04:05.000000000Z"
+
+func ts(t time.Time) string { return t.UTC().Format(tsLayout) }
 
 func parseTS(s string) time.Time {
-	t, _ := time.Parse(time.RFC3339Nano, s)
+	t, err := time.Parse(tsLayout, s)
+	if err != nil {
+		t, _ = time.Parse(time.RFC3339Nano, s)
+	}
 	return t
 }
 
