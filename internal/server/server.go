@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"netnoodle/internal/notify"
 	"netnoodle/internal/store"
 )
 
@@ -22,6 +23,7 @@ type Server struct {
 	ui          fs.FS
 	fingerprint string
 	limiter     *loginLimiter
+	notifiers   []notify.Notifier
 	now         func() time.Time
 }
 
@@ -44,6 +46,8 @@ func (s *Server) Handler() http.Handler {
 
 	// Component protocol.
 	mux.HandleFunc("GET /v1/health", s.handleHealth)
+	mux.HandleFunc("POST /v1/enroll", s.handleEnroll)
+	mux.HandleFunc("POST /v1/observations", s.requirePeer(s.handleObservations, store.RoleSource, store.RoleAgent))
 
 	// Operator API for the web UI.
 	mux.HandleFunc("POST /api/login", s.handleLogin)
@@ -51,6 +55,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/me", requireUser(s.handleMe))
 	mux.HandleFunc("GET /api/info", requireUser(s.handleInfo))
 	mux.HandleFunc("GET /api/events", requireUser(s.handleEvents))
+	mux.HandleFunc("GET /api/devices", requireUser(s.handleListDevices))
+	mux.HandleFunc("GET /api/devices/{id}", requireUser(s.handleGetDevice))
+	mux.HandleFunc("POST /api/devices/{id}/name", requireUser(s.handleRenameDevice))
+	mux.HandleFunc("GET /api/peers", requireUser(s.handleListPeers))
+	mux.HandleFunc("POST /api/peers/{id}/disable", requireUser(s.handleSetPeerDisabled(true)))
+	mux.HandleFunc("POST /api/peers/{id}/enable", requireUser(s.handleSetPeerDisabled(false)))
+	mux.HandleFunc("GET /api/join-tokens", requireUser(s.handleListJoinTokens))
+	mux.HandleFunc("POST /api/join-tokens", requireUser(s.handleCreateJoinToken))
+	mux.HandleFunc("DELETE /api/join-tokens/{id}", requireUser(s.handleDeleteJoinToken))
 
 	// Static UI. Unknown /api/ and /v1/ paths get a JSON 404, not a page.
 	files := http.FileServerFS(s.ui)
@@ -118,12 +131,6 @@ func readJSON(r *http.Request, v any) error {
 	return dec.Decode(v)
 }
 
-func (s *Server) event(r *http.Request, typ, actor, summary string) {
-	if err := s.st.AddEvent(r.Context(), store.Event{At: s.now(), Type: typ, Actor: actor, Summary: summary}); err != nil {
-		s.log.Error("event", "err", err)
-	}
-}
-
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "protocol": "v1"})
 }
@@ -146,7 +153,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	u, ok := s.checkLogin(r.Context(), req.User, req.Password)
 	if !ok {
 		s.limiter.fail(ip, now)
-		s.event(r, "login.failed", ip, "failed login for "+truncate(req.User, 64))
+		s.event(r.Context(), "login.failed", ip, "failed login for "+truncate(req.User, 64))
 		writeErr(w, http.StatusUnauthorized, errBadLogin.Error())
 		return
 	}
@@ -162,7 +169,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Name: sessionCookie, Value: tok, Path: "/", Expires: exp,
 		HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode,
 	})
-	s.event(r, "login", u.Name, "login from "+ip)
+	s.event(r.Context(), "login", u.Name, "login from "+ip)
 	writeJSON(w, http.StatusOK, map[string]string{"user": u.Name})
 }
 

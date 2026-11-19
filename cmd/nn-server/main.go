@@ -16,6 +16,9 @@ import (
 	"syscall"
 	"time"
 
+	"netnoodle/internal/notify"
+	_ "netnoodle/internal/plugins" // built-in plug-ins
+	"netnoodle/internal/registry"
 	"netnoodle/internal/server"
 	"netnoodle/internal/store/sqlite"
 	"netnoodle/web"
@@ -71,6 +74,17 @@ func run() error {
 	log.Info("tls", "fingerprint", fp)
 
 	srv := server.New(cfg, st, web.FS(), fp, log)
+
+	notifiers, err := registry.BuildAll(notify.Registry, cfg.Notifiers)
+	if err != nil {
+		return err
+	}
+	srv.SetNotifiers(notifiers)
+	if err := srv.RunSources(ctx, cfg.Sources); err != nil {
+		return err
+	}
+	go srv.RunMaintenance(ctx, cfg.ObservationRetention.Duration)
+
 	hs := &http.Server{
 		Addr:              cfg.Listen,
 		Handler:           srv.Handler(),

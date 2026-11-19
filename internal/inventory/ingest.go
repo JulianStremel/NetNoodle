@@ -49,6 +49,8 @@ type Tx interface {
 	// is true, rows of that source that are not in the list are removed.
 	PutComponents(deviceID int64, source string, comps []proto.Component, complete bool, at time.Time) error
 	PutServices(deviceID int64, source string, svcs []proto.Service, complete bool, at time.Time) error
+	// SeenBy records that a source saw a device.
+	SeenBy(deviceID int64, source string, at time.Time) error
 	SaveObservation(source string, at time.Time, payload []byte) error
 }
 
@@ -144,6 +146,9 @@ func (r *resolver) apply(e *proto.Entity, parentID int64) (int64, error) {
 		return 0, err
 	}
 	r.res.Devices = append(r.res.Devices, dev)
+	if err := tx.SeenBy(dev, r.obs.Source, at); err != nil {
+		return 0, err
+	}
 
 	for _, id := range e.Identifiers {
 		if err := tx.PutIdentifier(dev, id, r.obs.Source, at); err != nil {

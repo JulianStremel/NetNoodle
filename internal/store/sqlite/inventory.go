@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"sort"
 	"strings"
 	"time"
 
@@ -205,6 +204,7 @@ func (t *invTx) Merge(keep, drop int64) error {
 		{`UPDATE device_ids SET device_id = ? WHERE device_id = ?`, []any{keep, drop}},
 		{`UPDATE OR IGNORE components SET device_id = ? WHERE device_id = ?`, []any{keep, drop}},
 		{`UPDATE OR IGNORE services SET device_id = ? WHERE device_id = ?`, []any{keep, drop}},
+		{`UPDATE OR IGNORE device_sources SET device_id = ? WHERE device_id = ?`, []any{keep, drop}},
 		{`UPDATE devices SET parent_id = ? WHERE parent_id = ? AND id <> ?`, []any{keep, drop, keep}},
 		{`DELETE FROM devices WHERE id = ?`, []any{drop}},
 		{`UPDATE devices SET kind = ?, name = ?, parent_id = ?, attributes = ?, interfaces = ?, first_seen = ?, last_seen = ? WHERE id = ?`,
@@ -264,6 +264,12 @@ func (t *invTx) PutServices(deviceID int64, source string, svcs []proto.Service,
 	return nil
 }
 
+func (t *invTx) SeenBy(deviceID int64, source string, at time.Time) error {
+	return t.exec(`INSERT INTO device_sources(device_id, source, first_seen, last_seen) VALUES (?, ?, ?, ?)
+		ON CONFLICT(device_id, source) DO UPDATE SET last_seen = MAX(device_sources.last_seen, excluded.last_seen)`,
+		deviceID, source, ts(at), ts(at))
+}
+
 func (t *invTx) SaveObservation(source string, at time.Time, payload []byte) error {
 	return t.exec(`INSERT INTO observations(source, received_at, payload) VALUES (?, ?, ?)`, source, ts(at), payload)
 }
@@ -304,36 +310,42 @@ func (s *DB) ListDevices(ctx context.Context) ([]store.DeviceRow, error) {
 		return nil, err
 	}
 
-	ids, err := s.db.QueryContext(ctx, `SELECT device_id, kind, value, strength, source FROM device_ids ORDER BY device_id, kind, value`)
+	ids, err := s.db.QueryContext(ctx, `SELECT device_id, kind, value, strength FROM device_ids ORDER BY device_id, kind, value`)
 	if err != nil {
 		return nil, err
 	}
-	defer ids.Close()
-	srcSeen := map[int64]map[string]bool{}
 	for ids.Next() {
 		var dev int64
 		var id proto.Identifier
-		var src string
-		if err := ids.Scan(&dev, &id.Kind, &id.Value, &id.Strength, &src); err != nil {
+		if err := ids.Scan(&dev, &id.Kind, &id.Value, &id.Strength); err != nil {
+			ids.Close()
 			return nil, err
 		}
-		i, ok := byID[dev]
-		if !ok {
-			continue
+		if i, ok := byID[dev]; ok {
+			out[i].Identifiers = append(out[i].Identifiers, id)
 		}
-		out[i].Identifiers = append(out[i].Identifiers, id)
-		if srcSeen[dev] == nil {
-			srcSeen[dev] = map[string]bool{}
+	}
+	ids.Close()
+	if err := ids.Err(); err != nil {
+		return nil, err
+	}
+
+	srcs, err := s.db.QueryContext(ctx, `SELECT device_id, source FROM device_sources ORDER BY device_id, source`)
+	if err != nil {
+		return nil, err
+	}
+	defer srcs.Close()
+	for srcs.Next() {
+		var dev int64
+		var src string
+		if err := srcs.Scan(&dev, &src); err != nil {
+			return nil, err
 		}
-		if !srcSeen[dev][src] {
-			srcSeen[dev][src] = true
+		if i, ok := byID[dev]; ok {
 			out[i].Sources = append(out[i].Sources, src)
 		}
 	}
-	for i := range out {
-		sort.Strings(out[i].Sources)
-	}
-	return out, ids.Err()
+	return out, srcs.Err()
 }
 
 func (s *DB) GetDevice(ctx context.Context, id int64) (store.DeviceDetail, error) {

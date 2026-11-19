@@ -20,8 +20,12 @@ type Config struct {
 	// SessionTTL is the lifetime of a web UI session. Default 12h.
 	SessionTTL Duration `json:"session_ttl"`
 
+	// ObservationRetention is how long raw observations are kept. Default 7 days.
+	ObservationRetention Duration `json:"observation_retention"`
+
 	// Plug-in instances. Each entry is {type, name, settings}.
-	Sources   []registry.Spec `json:"sources,omitempty"`
+	// Sources also take an "interval" (default 10m).
+	Sources   []SourceSpec    `json:"sources,omitempty"`
 	Notifiers []registry.Spec `json:"notifiers,omitempty"`
 }
 
@@ -49,6 +53,8 @@ func DefaultConfig() Config {
 		Listen:     ":7443",
 		DataDir:    "data",
 		SessionTTL: Duration{12 * time.Hour},
+
+		ObservationRetention: Duration{7 * 24 * time.Hour},
 	}
 }
 
@@ -69,6 +75,9 @@ func LoadConfig(path string) (Config, error) {
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&c); err != nil {
 		return c, fmt.Errorf("config %s: %w", path, err)
+	}
+	if c.ObservationRetention.Duration <= 0 {
+		c.ObservationRetention.Duration = 7 * 24 * time.Hour
 	}
 	if c.SessionTTL.Duration <= 0 {
 		c.SessionTTL.Duration = 12 * time.Hour
