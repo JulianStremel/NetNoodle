@@ -9,6 +9,7 @@ Actions outside the automatic scope need the approval of an operator.
 > **Status:** Milestone M3 (threat feed). The server finds devices with `nn-scan` and the UniFi API, and removes duplicates.
 > `nn-agent` reports the packages, listening services and interfaces of Linux hosts.
 > The server compares the packages with OSV, CISA KEV and FIRST EPSS. The **Findings** page shows the vulnerable devices.
+> The `proxmox` source imports clusters, VMs and containers (M4, in progress). The agent also operates on Windows.
 > Refer to [docs/architecture.md](docs/architecture.md) for the design and the milestones.
 
 ## Parts
@@ -246,6 +247,36 @@ The agent reports the Windows version and build, the installed programs, the lis
 5. Restart `nn-server`.
 
 The API key gives read access only. The source reads sites, network devices and clients.
+
+## Procedure: import from Proxmox VE
+
+The `proxmox` source reads the nodes of a cluster, the virtual machines and the containers. It shows each guest below its node. It uses a token with read permissions only.
+
+1. On a Proxmox node, make a user, a token and the permission:
+
+   ```sh
+   pveum user add netnoodle@pve
+   pveum acl modify / --users netnoodle@pve --roles PVEAuditor
+   pveum user token add netnoodle@pve audit --privsep 0
+   ```
+
+2. Record the token secret. Put it in the file `config/proxmox.token`.
+3. Get the SHA-256 fingerprint of the certificate of the node: in the web interface of Proxmox, open **System > Certificates**.
+4. Add a source to `netnoodle.json`:
+
+   ```json
+   "sources": [{
+     "type": "proxmox", "name": "pve", "interval": "10m",
+     "settings": { "url": "https://pve1:8006", "token_id": "netnoodle@pve!audit",
+                   "token_secret_file": "/etc/netnoodle/proxmox.token", "fingerprint": "<sha256>" }
+   }]
+   ```
+
+5. Restart `nn-server`. On the **Devices** page, select **Show as tree**.
+
+The source gets IP addresses of containers from Proxmox. For virtual machines, it asks the QEMU guest agent. This needs the privilege `VM.GuestAgent.Audit` (Proxmox VE 9) or `VM.Monitor` (Proxmox VE 8). Without it, virtual machines show only their MAC addresses. To stop these requests, set `"guest_agent": false`.
+
+When an agent also operates in a guest, the server merges the two records by the MAC address.
 
 ## Procedure: send notifications
 

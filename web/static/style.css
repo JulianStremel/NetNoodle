@@ -125,3 +125,6 @@ form .grid { margin-bottom: .75rem; }
 .check input { width: auto; margin: 0; display: inline; }
 .chip { display: inline-flex; gap: .4rem; align-items: center; padding: .1rem .5rem; border: 1px solid var(--line); border-radius: 999px; }
 .summary { margin: .1rem 0 0; color: var(--muted); font-size: 12px; max-width: 46rem; }
+.indent-1 { padding-left: 1.2rem; }
+.indent-2 { padding-left: 2.4rem; }
+.indent-3 { padding-left: 3.6rem; }

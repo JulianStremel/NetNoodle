@@ -21,30 +21,58 @@ async function list(root) {
   const label = (d) => d.name || idsOf(d, "hostname")[0] || idsOf(d, "ip")[0] || `#${d.id}`;
 
   const filter = el("input", { placeholder: "Filter by name, IP, MAC, source, kind …", type: "search" });
+  const treeBox = el("input", { type: "checkbox" });
+  try { treeBox.checked = localStorage.getItem("nn.devices.tree") === "1"; } catch { /* storage blocked */ }
+
+  // Tree order: each device follows its parent, children indented.
+  const treeOrder = (list) => {
+    const kids = new Map();
+    const inList = new Set(list.map((d) => d.id));
+    for (const d of list) {
+      const p = d.parent_id && inList.has(d.parent_id) ? d.parent_id : 0;
+      if (!kids.has(p)) kids.set(p, []);
+      kids.get(p).push(d);
+    }
+    const out = [];
+    const walk = (p, depth) => {
+      for (const d of kids.get(p) || []) {
+        out.push([d, depth]);
+        if (depth < 6) walk(d.id, depth + 1);
+      }
+    };
+    walk(0, 0);
+    return out;
+  };
+
   const wrap = el("div");
   const draw = () => {
     const q = filter.value.trim().toLowerCase();
     const rows = devs.filter((d) => !q || JSON.stringify(d).toLowerCase().includes(q));
+    const ordered = treeBox.checked ? treeOrder(rows) : rows.map((d) => [d, 0]);
     wrap.replaceChildren(table([
-      { title: "Device", render: (d) => el("a", { href: `#/devices/${d.id}` }, label(d)) },
-      { title: "Kind", render: (d) => kindPill(d.kind) },
-      { title: "IP", render: (d) => idsOf(d, "ip").join(", ") },
-      { title: "MAC", render: (d) => el("span", { class: "mono" }, idsOf(d, "mac").join(", ")) },
-      { title: "Parent", render: (d) => (d.parent_id ? el("a", { href: `#/devices/${d.parent_id}` }, byID.has(d.parent_id) ? label(byID.get(d.parent_id)) : `#${d.parent_id}`) : "") },
-      { title: "Sources", render: (d) => d.sources.join(", ") },
-      { title: "Risk", render: (d) => (d.findings ? [sevPill(d.max_score), " ", el("a", { href: `#/findings?device=${d.id}`, class: "small" }, `${d.findings}`), d.kev ? [" ", el("span", { class: "tag kev" }, "KEV")] : ""] : "") },
-      { title: "Pkgs", key: "components" },
-      { title: "Svcs", key: "services" },
-      { title: "Last seen", render: (d) => el("span", { title: fmtTime(d.last_seen) }, ago(d.last_seen)) },
-    ], rows));
+      { title: "Device", render: ([d, depth]) => el("span", { class: depth ? `indent-${Math.min(depth, 3)}` : "" }, depth ? "↳ " : "", el("a", { href: `#/devices/${d.id}` }, label(d))) },
+      { title: "Kind", render: ([d]) => kindPill(d.kind) },
+      { title: "IP", render: ([d]) => idsOf(d, "ip").join(", ") },
+      { title: "MAC", render: ([d]) => el("span", { class: "mono" }, idsOf(d, "mac").join(", ")) },
+      { title: "Parent", render: ([d]) => (d.parent_id ? el("a", { href: `#/devices/${d.parent_id}` }, byID.has(d.parent_id) ? label(byID.get(d.parent_id)) : `#${d.parent_id}`) : "") },
+      { title: "Sources", render: ([d]) => d.sources.join(", ") },
+      { title: "Risk", render: ([d]) => (d.findings ? [sevPill(d.max_score), " ", el("a", { href: `#/findings?device=${d.id}`, class: "small" }, `${d.findings}`), d.kev ? [" ", el("span", { class: "tag kev" }, "KEV")] : ""] : "") },
+      { title: "Pkgs", render: ([d]) => d.components },
+      { title: "Svcs", render: ([d]) => d.services },
+      { title: "Last seen", render: ([d]) => el("span", { title: fmtTime(d.last_seen) }, ago(d.last_seen)) },
+    ], ordered));
   };
+  treeBox.addEventListener("change", () => {
+    try { localStorage.setItem("nn.devices.tree", treeBox.checked ? "1" : "0"); } catch { /* storage blocked */ }
+    draw();
+  });
   filter.addEventListener("input", draw);
   draw();
   root.append(el("div", { class: "card" },
     el("h2", {}, `Devices (${devs.length})`),
     devs.length === 0
       ? el("p", { class: "muted" }, "No devices yet. Enroll a scanner or an agent on the Peers page, or configure a source.")
-      : [filter, el("div", { class: "gap" }), wrap]));
+      : [el("div", { class: "filters" }, filter, el("label", { class: "check" }, treeBox, "Show as tree (guests under their host)")), wrap]));
 }
 
 async function detail(root, id) {

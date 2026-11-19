@@ -197,7 +197,7 @@ The Go types are in `internal/proto`. The Rust types are in `agent/nn-proto`.
 | M1 | Ingest API, identity resolver, `nn-scan`, `unifi` source, device list | Done |
 | M2 | Agent enrollment, collectors `os`, `dpkg`, `rpm`, `apk`, `sockets`, `interfaces` | Done |
 | M3 | OSV, KEV and EPSS, findings page | Done |
-| M4 | `proxmox` source, collectors `containers`, `lxc`, `qga`, device tree | Not done |
+| M4 | `proxmox` source, collectors `containers`, `lxc`, `qga`, device tree | In progress: `proxmox` source and device tree done |
 | M5 | `rules` decider, guards, approval queue, webhook notifier | Not done |
 | M6 | Actor protocol, signed orders, `nn-actor`, `nn-actor-host`, time limits | Not done |
 | M7 | `llm` decider | Not done |
