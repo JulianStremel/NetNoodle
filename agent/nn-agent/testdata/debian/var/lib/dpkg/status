@@ -1,0 +1,34 @@
+Package: libssl3
+Status: install ok installed
+Priority: optional
+Architecture: amd64
+Multi-Arch: same
+Source: openssl
+Version: 3.0.11-1~deb12u2
+Description: Secure Sockets Layer toolkit - shared libraries
+ This package is part of the OpenSSL project.
+
+Package: oldpkg
+Status: deinstall ok config-files
+Architecture: amd64
+Version: 1.0-1
+
+Package: nginx-core
+Status: install ok installed
+Architecture: amd64
+Source: nginx
+Version: 1.22.1-9
+Conffiles:
+ /etc/nginx/nginx.conf 0123456789abcdef
+
+Package: libc6
+Status: install ok installed
+Architecture: amd64
+Source: glibc
+Version: 2.36-9+deb12u4
+
+Package: python3-six
+Status: install ok installed
+Architecture: all
+Source: six (1.16.0-3)
+Version: 1.16.0-4

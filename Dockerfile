@@ -2,6 +2,7 @@
 # Images for the Go parts of netnoodle.
 #   docker build --target server -t netnoodle/server .
 #   docker build --target scan   -t netnoodle/scan .
+#   docker build --target agent --output bin/linux .   (static nn-agent for Linux x86_64)
 # The Rust agent and the host actor run on the host itself, not in a container.
 
 FROM golang:1.26-alpine AS build
@@ -32,3 +33,13 @@ WORKDIR /var/lib/nn-scan
 VOLUME /var/lib/nn-scan
 ENTRYPOINT ["/usr/local/bin/nn-scan"]
 CMD ["run", "-config", "/etc/netnoodle/nn-scan.json"]
+
+# nn-agent: static Linux binary (musl). Export it with --output; it is not a service image.
+FROM rust:1-alpine AS agent-build
+RUN apk add --no-cache musl-dev
+WORKDIR /src
+COPY agent/ ./
+RUN cargo build --release --locked -p nn-agent
+
+FROM scratch AS agent
+COPY --from=agent-build /src/target/release/nn-agent /nn-agent

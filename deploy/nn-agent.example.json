@@ -1,0 +1,4 @@
+{
+  "interval": "1h",
+  "collectors": ["os", "interfaces", "dpkg", "rpm", "apk", "sockets"]
+}

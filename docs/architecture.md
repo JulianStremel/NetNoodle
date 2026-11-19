@@ -86,6 +86,11 @@ The configuration enables the collectors.
 The agent operates as a user without root permissions by default.
 Collectors that need more permissions are optional.
 
+- The agent sends one top-level entity for its host. Each report contains all packages and services (`complete: true`). The server then removes data that the report does not contain.
+- If a collector fails, the report is not complete. The server then keeps the earlier data. The attribute `agent.errors` shows the failure.
+- The `sockets` collector finds the program of each listening socket. The package collectors find the package that owns the program. The service then refers to the package URL.
+- Package URLs use the qualifiers `arch`, `distro` and `upstream` (the source package). The matcher uses `upstream` for Debian and Ubuntu.
+
 ### 3.4 Inventory and deduplication
 
 Each observation contains entities. Each entity has identifiers.
@@ -172,7 +177,7 @@ The Go types are in `internal/proto`. The Rust types are in `agent/nn-proto`.
 |---|---|---|
 | M0 | Skeleton: protocol, registries, server with store, TLS, login and web interface shell | Done |
 | M1 | Ingest API, identity resolver, `nn-scan`, `unifi` source, device list | Done |
-| M2 | Agent enrollment, collectors `os`, `dpkg`, `rpm`, `apk`, `sockets`, `interfaces` | Not done |
+| M2 | Agent enrollment, collectors `os`, `dpkg`, `rpm`, `apk`, `sockets`, `interfaces` | Done |
 | M3 | OSV, KEV and EPSS, findings page | Not done |
 | M4 | `proxmox` source, collectors `containers`, `lxc`, `qga`, device tree | Not done |
 | M5 | `rules` decider, guards, approval queue, webhook notifier | Not done |

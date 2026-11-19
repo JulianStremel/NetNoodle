@@ -6,7 +6,8 @@ It compares the software with vulnerability data.
 When a dangerous vulnerability occurs, netnoodle can do an action, for example block a device.
 Actions outside the automatic scope need the approval of an operator.
 
-> **Status:** Milestone M1 (discovery). The server finds devices with `nn-scan` and the UniFi API, and removes duplicates.
+> **Status:** Milestone M2 (agent). The server finds devices with `nn-scan` and the UniFi API, and removes duplicates.
+> `nn-agent` reports the packages, listening services and interfaces of Linux hosts.
 > Refer to [docs/architecture.md](docs/architecture.md) for the design and the milestones.
 
 ## Parts
@@ -15,7 +16,7 @@ Actions outside the automatic scope need the approval of an operator.
 |---|---|---|
 | `nn-server` | Go | Central server. Web interface, ingest, deduplication, threat matching, decisions, order queue. |
 | `nn-scan` | Go | Subnet scanner. Sends observations to the server. |
-| `nn-agent` | Rust | Agent on a host or hypervisor. Collects packages, services and guests. (M2, M4) |
+| `nn-agent` | Rust | Agent on a Linux host. Collects packages, services and interfaces. Guests on hypervisors follow in M4. |
 | `nn-actor` | Go | Actor for network APIs (UniFi, Proxmox). (M6) |
 | `nn-actor-host` | Rust | Actor on a host (systemd units, firewall rules). (M6) |
 
@@ -127,6 +128,51 @@ To start the scanner in a container, do these steps:
 8. Open **Devices** in the web interface.
 
 To test a scan without a server, run `bin/nn-scan scan -cidr 192.168.1.0/24`.
+
+## Procedure: install the agent
+
+`nn-agent` operates on Linux x86_64. It only reads data. It does not listen on a network port.
+
+1. Build the static binary (Docker is necessary):
+
+   ```sh
+   docker build --target agent --output bin/linux .
+   ```
+
+2. Copy `bin/linux/nn-agent` to `/usr/local/bin/nn-agent` on the host. Make it executable.
+3. Make a user and a data directory:
+
+   ```sh
+   useradd --system --no-create-home --shell /usr/sbin/nologin nn-agent
+   install -d -o nn-agent -g nn-agent -m 700 /var/lib/nn-agent
+   ```
+
+4. In the web interface, open **Peers**. Set **Role** to `agent`. Click **Create join token**.
+5. Enroll the agent:
+
+   ```sh
+   sudo -u nn-agent nn-agent enroll --server https://<server>:7443 --fingerprint <sha256> --token <join token>
+   ```
+
+   The peer name is the host name. To use a different name, add `--name <name>`.
+6. Install the service:
+
+   ```sh
+   cp deploy/nn-agent.service /etc/systemd/system/
+   systemctl daemon-reload
+   systemctl enable --now nn-agent
+   ```
+
+7. Open **Devices** in the web interface. The host shows its packages and services.
+
+The agent sends a report each hour. To change this, write `/etc/nn-agent/config.json`.
+Refer to [deploy/nn-agent.example.json](deploy/nn-agent.example.json).
+
+To see the files, sockets and programs that the agent uses, run `nn-agent scope`.
+To see a report without sending it, run `nn-agent collect`.
+
+> **Note:** As a user without root permissions, the agent cannot see the program of a socket that belongs to a different user. The service then shows no package.
+> To give this data, read the comments in `deploy/nn-agent.service`.
 
 ## Procedure: import from UniFi
 

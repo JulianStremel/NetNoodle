@@ -2,30 +2,199 @@
 //! sends it to nn-server as a v1 Observation. The agent never listens on a
 //! port and never executes commands from the server.
 
-// Collectors are wired in at milestone M2.
-#[allow(dead_code)]
+mod client;
 mod collector;
+mod collectors;
+mod config;
+mod report;
 
-use collector::Collector;
+use clap::{Parser, Subcommand};
+use collector::{Collector, Ctx};
+use config::Config;
+use std::path::PathBuf;
+use std::process::ExitCode;
 
-/// All compiled-in collectors. Collectors register here; the config
-/// selects which of them run.
-fn registry() -> Vec<Box<dyn Collector>> {
-    Vec::new()
+#[derive(Parser)]
+#[command(
+    name = "nn-agent",
+    version,
+    about = "netnoodle agent: reports packages, services and interfaces of this host"
+)]
+struct Cli {
+    /// Config file (optional).
+    #[arg(long, global = true, default_value = config::DEFAULT_CONFIG)]
+    config: PathBuf,
+    /// Credentials file. Overrides the config.
+    #[arg(long, global = true)]
+    creds: Option<PathBuf>,
+    #[command(subcommand)]
+    cmd: Cmd,
 }
 
-fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    match args.first().map(String::as_str) {
-        Some("scope") => {
-            for c in registry() {
-                println!("{}: {:?}", c.name(), c.access());
+#[derive(Subcommand)]
+enum Cmd {
+    /// Exchange a join token for credentials.
+    Enroll {
+        /// Server URL, e.g. https://10.0.0.2:7443
+        #[arg(long)]
+        server: String,
+        /// SHA-256 fingerprint of the server certificate.
+        #[arg(long)]
+        fingerprint: String,
+        /// Join token from the Peers page.
+        #[arg(long)]
+        token: String,
+        /// Peer name. Default: the host name.
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Collect and send reports.
+    Run {
+        /// Send one report and exit.
+        #[arg(long)]
+        once: bool,
+    },
+    /// Collect and print the report as JSON. Sends nothing.
+    Collect {
+        /// Read this directory as the root file system.
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
+    /// Show the files, sockets and programs each enabled collector uses.
+    Scope,
+}
+
+fn enabled(cfg: &Config) -> Result<Vec<Box<dyn Collector>>, String> {
+    let all = collectors::all();
+    let Some(names) = &cfg.collectors else {
+        return Ok(all);
+    };
+    for n in names {
+        if !all.iter().any(|c| c.name() == n) {
+            let known: Vec<_> = all.iter().map(|c| c.name()).collect();
+            return Err(format!(
+                "unknown collector {n:?} (known: {})",
+                known.join(", ")
+            ));
+        }
+    }
+    Ok(all
+        .into_iter()
+        .filter(|c| names.iter().any(|n| n == c.name()))
+        .collect())
+}
+
+fn hostname() -> String {
+    std::fs::read_to_string("/proc/sys/kernel/hostname")
+        .ok()
+        .or_else(|| std::env::var("HOSTNAME").ok())
+        .or_else(|| std::env::var("COMPUTERNAME").ok())
+        .map(|s| s.trim().to_lowercase())
+        .unwrap_or_default()
+}
+
+fn send_once(
+    cfg: &Config,
+    creds: &client::Credentials,
+    cols: &[Box<dyn Collector>],
+) -> Result<(), String> {
+    let ctx = Ctx { root: cfg.root() };
+    let r = report::collect(&ctx, cols);
+    for e in &r.errors {
+        eprintln!("nn-agent: collector {e}");
+    }
+    let (pkgs, svcs) = (r.entity.components.len(), r.entity.services.len());
+    let obs = report::observation(r, &creds.name);
+    let res = client::post_observation(creds, &obs)?;
+    eprintln!("nn-agent: report sent: {pkgs} packages, {svcs} services; server: {res}");
+    Ok(())
+}
+
+fn run(cli: Cli) -> Result<(), String> {
+    let cfg = Config::load(&cli.config)?;
+    let creds_path = cli.creds.clone().unwrap_or_else(|| cfg.credentials());
+    match cli.cmd {
+        Cmd::Enroll {
+            server,
+            fingerprint,
+            token,
+            name,
+        } => {
+            let name = name.unwrap_or_else(hostname);
+            let c = client::enroll(&server, &fingerprint, &token, &name)?;
+            client::save(&creds_path, &c)?;
+            println!(
+                "enrolled as {:?} (role {}); credentials in {}",
+                c.name,
+                c.role,
+                creds_path.display()
+            );
+            if c.role != "agent" {
+                eprintln!(
+                    "warning: the join token has role {:?}, not \"agent\"",
+                    c.role
+                );
+            }
+            Ok(())
+        }
+        Cmd::Run { once } => {
+            let cols = enabled(&cfg)?;
+            let creds = client::load(&creds_path)?;
+            let every = cfg.interval()?;
+            loop {
+                if let Err(e) = send_once(&cfg, &creds, &cols) {
+                    if once {
+                        return Err(e);
+                    }
+                    eprintln!("nn-agent: {e}");
+                }
+                if once {
+                    return Ok(());
+                }
+                std::thread::sleep(every);
             }
         }
-        Some("version") | Some("--version") => println!("nn-agent {}", env!("CARGO_PKG_VERSION")),
-        _ => {
-            eprintln!("usage: nn-agent <scope|version>");
-            std::process::exit(2);
+        Cmd::Collect { root } => {
+            let cols = enabled(&cfg)?;
+            let ctx = Ctx {
+                root: root.unwrap_or_else(|| cfg.root()),
+            };
+            let r = report::collect(&ctx, &cols);
+            let obs = report::observation(r, "local");
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&obs).map_err(|e| e.to_string())?
+            );
+            Ok(())
+        }
+        Cmd::Scope => {
+            for c in enabled(&cfg)? {
+                let a = c.access();
+                println!("{}", c.name());
+                for (label, list) in [
+                    ("reads", &a.reads),
+                    ("sockets", &a.sockets),
+                    ("runs", &a.execs),
+                ] {
+                    for item in list {
+                        println!("  {label:8} {item}");
+                    }
+                }
+                if !a.privileged.is_empty() {
+                    println!("  {:8} {}", "root for", a.privileged);
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+fn main() -> ExitCode {
+    match run(Cli::parse()) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("nn-agent: {e}");
+            ExitCode::FAILURE
         }
     }
 }

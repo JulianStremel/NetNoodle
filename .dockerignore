@@ -2,7 +2,7 @@
 bin
 data
 config
-agent
+agent/target
 docs
 *.db
 *.db-wal
