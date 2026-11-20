@@ -1,0 +1,23 @@
+{
+  "ProductTree": {
+    "FullProductName":[
+      {"ProductID":"old-client-id", "Value":"Windows 11 Version 24H2 for x64-based Systems"}
+    ]
+  },
+  "Vulnerability":[
+    {
+      "CVE":"CVE-2026-0001",
+      "Title":{"Value":"Older title"},
+      "Threats":[
+        {"Type":3, "Description":{"Value":"Important"}},
+        {"Type":1, "Description":{"Value":"Publicly Disclosed:No;Exploited:No"}}
+      ],
+      "CVSSScoreSets":[
+        {"BaseScore":9.1, "Vector":"older-vector", "ProductID":["old-client-id"]}
+      ],
+      "Remediations":[
+        {"Type":2, "Description":{"Value":"5040000"}, "FixedBuild":"10.0.26100.2200", "ProductID":["old-client-id"], "URL":"https://support.microsoft.com/help/5040000"}
+      ]
+    }
+  ]
+}

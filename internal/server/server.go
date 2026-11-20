@@ -30,6 +30,7 @@ type Server struct {
 	peerRate    *rateLimiter
 	reserved    map[string]bool
 	intel       *intelState
+	pull        *pullState
 	now         func() time.Time
 }
 
@@ -48,6 +49,7 @@ func New(cfg Config, st store.Store, ui fs.FS, fingerprint string, log *slog.Log
 		peerRate:    newRateLimiter(60, 10*time.Minute),
 		reserved:    reservedNames(cfg),
 		intel:       newIntelState(),
+		pull:        newPullState(),
 		now:         time.Now,
 	}
 }
@@ -70,12 +72,17 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/findings", requireUser(s.handleFindings))
 	mux.HandleFunc("POST /api/intel/refresh", requireUser(s.handleIntelRefresh))
 	mux.HandleFunc("GET /api/events", requireUser(s.handleEvents))
+	mux.HandleFunc("GET /api/graph", requireUser(s.handleGraph))
 	mux.HandleFunc("GET /api/devices", requireUser(s.handleListDevices))
 	mux.HandleFunc("GET /api/devices/{id}", requireUser(s.handleGetDevice))
 	mux.HandleFunc("POST /api/devices/{id}/name", requireUser(s.handleRenameDevice))
 	mux.HandleFunc("GET /api/peers", requireUser(s.handleListPeers))
 	mux.HandleFunc("POST /api/peers/{id}/disable", requireUser(s.handleSetPeerDisabled(true)))
 	mux.HandleFunc("POST /api/peers/{id}/enable", requireUser(s.handleSetPeerDisabled(false)))
+	mux.HandleFunc("GET /api/pull-peers", requireUser(s.handleListPullPeers))
+	mux.HandleFunc("POST /api/pull-peers", requireUser(s.handleCreatePullPeer))
+	mux.HandleFunc("POST /api/pull-peers/{id}/pair", requireUser(s.handleNewPairCode))
+	mux.HandleFunc("POST /api/pull-peers/{id}/pull", requireUser(s.handlePullNow))
 	mux.HandleFunc("GET /api/join-tokens", requireUser(s.handleListJoinTokens))
 	mux.HandleFunc("POST /api/join-tokens", requireUser(s.handleCreateJoinToken))
 	mux.HandleFunc("DELETE /api/join-tokens/{id}", requireUser(s.handleDeleteJoinToken))

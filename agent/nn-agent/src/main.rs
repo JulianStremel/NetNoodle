@@ -1,11 +1,11 @@
 //! nn-agent: collects inventory data with the smallest possible scope and
-//! sends it to nn-server as a v1 Observation. The agent never listens on a
-//! port and never executes commands from the server.
+//! sends it to nn-server as a v1 Observation. The agent listens on a port only
+//! in `serve` mode and never executes commands from the server.
 
 use clap::{Parser, Subcommand};
 use nn_agent::collector::Collector;
 use nn_agent::config::{self, Config};
-use nn_agent::{client, collectors, report};
+use nn_agent::{client, collectors, pull, report};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -28,6 +28,23 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Pair with a server that will pull reports over mutual TLS.
+    Pair {
+        /// One-time code from the Peers page. Prefer the environment variable.
+        #[arg(long, env = "NN_PAIR_CODE", hide_env_values = true)]
+        code: String,
+        /// SHA-256 fingerprint of the server's pull client certificate.
+        #[arg(long)]
+        server_fingerprint: String,
+        /// Local address and port to listen on, e.g. 0.0.0.0:7444.
+        #[arg(long)]
+        listen: String,
+        /// Replace the existing agent key and certificate.
+        #[arg(long)]
+        new_key: bool,
+    },
+    /// Listen for report requests from the pinned server.
+    Serve,
     /// Exchange a join token for credentials.
     Enroll {
         /// Server URL, e.g. https://10.0.0.2:7443
@@ -110,6 +127,20 @@ fn run(cli: Cli) -> Result<(), String> {
     let cfg = Config::load(&cli.config)?;
     let creds_path = cli.creds.clone().unwrap_or_else(|| cfg.credentials());
     match cli.cmd {
+        Cmd::Pair {
+            code,
+            server_fingerprint,
+            listen,
+            new_key,
+        } => pull::pair(
+            &cfg.pull_state(),
+            &code,
+            &server_fingerprint,
+            &listen,
+            new_key,
+            &hostname(),
+        ),
+        Cmd::Serve => pull::serve(&cfg, &enabled(&cfg)?, &hostname()),
         Cmd::Enroll {
             server,
             fingerprint,

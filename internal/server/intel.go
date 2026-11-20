@@ -62,6 +62,20 @@ func (s *Server) SetIntel(ms []intel.Matcher, es []intel.Enricher) {
 	for _, e := range es {
 		s.intel.feeds[e.Name()] = &FeedStatus{Name: e.Name()}
 	}
+	for _, m := range ms {
+		if _, ok := m.(intel.Refresher); ok {
+			s.intel.feeds[m.Name()] = &FeedStatus{Name: m.Name()}
+		}
+		// A matcher that loads its data in the background asks for a
+		// new match of all devices when the data is ready.
+		if r, ok := m.(interface{ OnReady(func()) }); ok {
+			r.OnReady(func() {
+				if ids, err := s.st.DevicesWithComponents(context.Background()); err == nil {
+					s.enqueueMatch(ids...)
+				}
+			})
+		}
+	}
 }
 
 func (s *Server) intelPlugins() ([]intel.Matcher, []intel.Enricher) {
@@ -130,8 +144,21 @@ func (s *Server) KickIntel() {
 }
 
 func (s *Server) refreshFeeds(ctx context.Context) {
-	_, es := s.intelPlugins()
+	ms, es := s.intelPlugins()
+	type feed interface {
+		Name() string
+		intel.Refresher
+	}
+	var feeds []feed
+	for _, m := range ms {
+		if r, ok := m.(feed); ok {
+			feeds = append(feeds, r)
+		}
+	}
 	for _, e := range es {
+		feeds = append(feeds, e)
+	}
+	for _, e := range feeds {
 		rctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 		err := e.Refresh(rctx)
 		cancel()

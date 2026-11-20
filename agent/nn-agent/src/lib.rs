@@ -5,4 +5,5 @@ pub mod client;
 pub mod collector;
 pub mod collectors;
 pub mod config;
+pub mod pull;
 pub mod report;

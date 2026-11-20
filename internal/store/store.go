@@ -104,6 +104,41 @@ type Peers interface {
 	SetPeerDisabled(ctx context.Context, id int64, disabled bool) error
 }
 
+// PullPeer is an agent peer that the server pulls reports from.
+type PullPeer struct {
+	Peer
+	Transport   string        `json:"transport"`
+	Address     string        `json:"address"`
+	Pin         string        `json:"pin,omitempty"` // agent certificate fingerprint; empty until paired
+	PairCode    string        `json:"-"`
+	PairExpires time.Time     `json:"pair_expires,omitzero"`
+	Interval    time.Duration `json:"interval_ns"`
+	NextPull    time.Time     `json:"next_pull"`
+	LastPull    time.Time     `json:"last_pull,omitzero"`
+	LastError   string        `json:"last_error,omitempty"`
+}
+
+// Pulls stores pull peers.
+type Pulls interface {
+	// CreatePullPeer creates an agent peer without a usable token and its
+	// pull settings. ErrConflict if the name exists.
+	CreatePullPeer(ctx context.Context, p PullPeer, tokenHash []byte, now time.Time) (PullPeer, error)
+	ListPullPeers(ctx context.Context) ([]PullPeer, error)
+	GetPullPeer(ctx context.Context, id int64) (PullPeer, error)
+	// DuePullPeers returns enabled pull peers with next_pull <= now.
+	DuePullPeers(ctx context.Context, now time.Time) ([]PullPeer, error)
+	// SetPairCode sets a new pairing code and deletes the pin.
+	SetPairCode(ctx context.Context, id int64, code string, expires, next time.Time) error
+	// SetPin pins the agent certificate if the code is still the given
+	// one, and deletes the code. ErrConflict if the code changed.
+	SetPin(ctx context.Context, id int64, code, pin string) error
+	// SetPullResult records the outcome of a pull or pairing attempt.
+	// ok updates last_pull.
+	SetPullResult(ctx context.Context, id int64, ok bool, at, next time.Time, errText string) error
+	// SetNextPull schedules the next attempt.
+	SetNextPull(ctx context.Context, id int64, next time.Time) error
+}
+
 // DeviceRef is a short reference to a device.
 type DeviceRef struct {
 	ID   int64  `json:"id"`
@@ -155,6 +190,12 @@ type ServiceRow struct {
 	LastSeen  time.Time `json:"last_seen"`
 }
 
+// DeviceService is a service with its device.
+type DeviceService struct {
+	DeviceID int64 `json:"device_id"`
+	proto.Service
+}
+
 // DeviceDetail is the full record of one device.
 type DeviceDetail struct {
 	ID         int64             `json:"id"`
@@ -178,6 +219,8 @@ type Inventory interface {
 	ListDevices(ctx context.Context) ([]DeviceRow, error)
 	GetDevice(ctx context.Context, id int64) (DeviceDetail, error)
 	RenameDevice(ctx context.Context, id int64, name string) error
+	// ListAllServices returns the services of all devices.
+	ListAllServices(ctx context.Context) ([]DeviceService, error)
 	PurgeObservations(ctx context.Context, before time.Time) error
 }
 
@@ -258,6 +301,7 @@ type Store interface {
 	Sessions
 	Events
 	Peers
+	Pulls
 	Inventory
 	Intel
 	Close() error

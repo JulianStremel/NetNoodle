@@ -27,7 +27,7 @@ func LoadOrCreateCert(dataDir string) (tls.Certificate, string, error) {
 	keyPath := filepath.Join(dir, "key.pem")
 
 	if _, err := os.Stat(certPath); errors.Is(err, os.ErrNotExist) {
-		if err := createSelfSigned(dir, certPath, keyPath); err != nil {
+		if err := createSelfSigned(dir, certPath, keyPath, x509.ExtKeyUsageServerAuth); err != nil {
 			return tls.Certificate{}, "", err
 		}
 	}
@@ -44,7 +44,27 @@ func Fingerprint(der []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func createSelfSigned(dir, certPath, keyPath string) error {
+// LoadOrCreatePullCert loads or creates the client certificate that the
+// server presents to pull agents (data/tls/pull-client-{cert,key}.pem).
+// Pull agents pin its fingerprint. It is separate from the HTTPS server
+// key, so each one can be replaced alone.
+func LoadOrCreatePullCert(dataDir string) (tls.Certificate, string, error) {
+	dir := filepath.Join(dataDir, "tls")
+	certPath := filepath.Join(dir, "pull-client-cert.pem")
+	keyPath := filepath.Join(dir, "pull-client-key.pem")
+	if _, err := os.Stat(certPath); errors.Is(err, os.ErrNotExist) {
+		if err := createSelfSigned(dir, certPath, keyPath, x509.ExtKeyUsageClientAuth); err != nil {
+			return tls.Certificate{}, "", err
+		}
+	}
+	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+	if err != nil {
+		return cert, "", err
+	}
+	return cert, Fingerprint(cert.Certificate[0]), nil
+}
+
+func createSelfSigned(dir, certPath, keyPath string, usage x509.ExtKeyUsage) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
@@ -63,7 +83,7 @@ func createSelfSigned(dir, certPath, keyPath string) error {
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().AddDate(10, 0, 0),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		ExtKeyUsage:  []x509.ExtKeyUsage{usage},
 		DNSNames:     []string{"localhost"},
 		IPAddresses:  []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback},
 	}

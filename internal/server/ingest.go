@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -94,20 +95,36 @@ func (s *Server) handleObservations(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusRequestEntityTooLarge, "body too large or too slow")
 		return
 	}
+	res, code, err := s.acceptObservation(r.Context(), p, raw)
+	if err != nil {
+		writeErr(w, code, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"devices": len(res.Devices), "new": len(res.New), "merged": len(res.Merged), "skipped": res.Skipped,
+	})
+}
+
+// errIngest hides internal ingest errors from peers.
+var errIngest = errors.New("ingest failed")
+
+// acceptObservation checks and ingests one raw observation of peer p
+// (pushed or pulled). On error it returns an HTTP status for the peer.
+func (s *Server) acceptObservation(ctx context.Context, p store.Peer, raw []byte) (inventory.Result, int, error) {
 	var obs proto.Observation
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&obs); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid observation: "+err.Error())
-		return
+		return inventory.Result{}, http.StatusBadRequest, fmt.Errorf("invalid observation: %w", err)
+	}
+	if dec.More() {
+		return inventory.Result{}, http.StatusBadRequest, errors.New("invalid observation: data after the JSON object")
 	}
 	if obs.Version != proto.Version {
-		writeErr(w, http.StatusBadRequest, "unsupported version "+strconv.Quote(obs.Version))
-		return
+		return inventory.Result{}, http.StatusBadRequest, errors.New("unsupported version " + strconv.Quote(obs.Version))
 	}
 	if n := inventory.CountEntities(obs.Entities); n > inventory.MaxEntities {
-		writeErr(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("too many entities (%d, maximum %d)", n, inventory.MaxEntities))
-		return
+		return inventory.Result{}, http.StatusRequestEntityTooLarge, fmt.Errorf("too many entities (%d, maximum %d)", n, inventory.MaxEntities)
 	}
 	// The source name is the authenticated peer, not what the body says.
 	obs.Source = p.Name
@@ -116,22 +133,18 @@ func (s *Server) handleObservations(w http.ResponseWriter, r *http.Request) {
 		// An agent reports about its own host only. The server sets the
 		// agent identifier; the agent cannot claim or merge other devices.
 		if err := inventory.PrepareAgent(&obs, p.Name); err != nil {
-			writeErr(w, http.StatusBadRequest, err.Error())
-			return
+			return inventory.Result{}, http.StatusBadRequest, err
 		}
 		agent = p.Name
 	} else {
 		inventory.StripAgentIDs(obs.Entities)
 	}
-	res, err := s.ingestAs(r.Context(), obs, raw, agent)
+	res, err := s.ingestAs(ctx, obs, raw, agent)
 	if err != nil {
 		s.log.Error("ingest", "peer", p.Name, "err", err)
-		writeErr(w, http.StatusInternalServerError, "ingest failed")
-		return
+		return res, http.StatusInternalServerError, errIngest
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"devices": len(res.Devices), "new": len(res.New), "merged": len(res.Merged), "skipped": res.Skipped,
-	})
+	return res, http.StatusOK, nil
 }
 
 // --- operator API for devices ---

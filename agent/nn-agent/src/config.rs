@@ -13,6 +13,10 @@ pub const DEFAULT_CREDENTIALS: &str = "/var/lib/nn-agent/credentials.json";
 #[cfg(windows)]
 pub const DEFAULT_CREDENTIALS: &str = r"C:\ProgramData\netnoodle\agent\credentials.json";
 #[cfg(not(windows))]
+pub const DEFAULT_PULL_STATE: &str = "/var/lib/nn-agent/pull.json";
+#[cfg(windows)]
+pub const DEFAULT_PULL_STATE: &str = r"C:\ProgramData\netnoodle\agent\pull.json";
+#[cfg(not(windows))]
 pub const DEFAULT_HELPER: &str = "/run/nn-agent-helper.sock";
 #[cfg(windows)]
 pub const DEFAULT_HELPER: &str = "";
@@ -22,6 +26,8 @@ pub const DEFAULT_HELPER: &str = "";
 pub struct Config {
     /// Credentials file written by `nn-agent enroll`.
     pub credentials: Option<PathBuf>,
+    /// Pull-mode identity and pairing code written by `nn-agent pair`.
+    pub pull_state: Option<PathBuf>,
     /// Time between reports, e.g. "1h". Default 1h, minimum 1m.
     pub interval: Option<String>,
     /// Collectors to run. Default: all built-in collectors.
@@ -51,6 +57,12 @@ impl Config {
 
     pub fn root(&self) -> PathBuf {
         self.root.clone().unwrap_or_else(|| PathBuf::from("/"))
+    }
+
+    pub fn pull_state(&self) -> PathBuf {
+        self.pull_state
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_PULL_STATE))
     }
 
     /// The collector context for this config. `root` overrides the config.

@@ -19,6 +19,8 @@ import (
 	"github.com/JulianStremel/netnoodle/internal/intel"
 	"github.com/JulianStremel/netnoodle/internal/notify"
 	_ "github.com/JulianStremel/netnoodle/internal/plugins" // built-in plug-ins
+	"github.com/JulianStremel/netnoodle/internal/pull"
+	pullhttps "github.com/JulianStremel/netnoodle/internal/pull/https"
 	"github.com/JulianStremel/netnoodle/internal/registry"
 	"github.com/JulianStremel/netnoodle/internal/server"
 	"github.com/JulianStremel/netnoodle/internal/store/sqlite"
@@ -94,6 +96,13 @@ func run() error {
 	if err := srv.RunSources(ctx, cfg.Sources); err != nil {
 		return err
 	}
+	pullCert, pullFP, err := server.LoadOrCreatePullCert(cfg.DataDir)
+	if err != nil {
+		return err
+	}
+	log.Info("pull client certificate", "fingerprint", pullFP)
+	srv.SetPull(map[string]pull.Transport{"https": pullhttps.New(pullCert, pullFP)}, pullFP)
+	go srv.RunPull(ctx)
 	go srv.RunMaintenance(ctx, cfg.ObservationRetention.Duration)
 
 	hs := &http.Server{

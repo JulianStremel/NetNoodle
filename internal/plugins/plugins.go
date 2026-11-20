@@ -6,6 +6,7 @@ package plugins
 import (
 	_ "github.com/JulianStremel/netnoodle/internal/intel/epss"
 	_ "github.com/JulianStremel/netnoodle/internal/intel/kev"
+	_ "github.com/JulianStremel/netnoodle/internal/intel/msrc"
 	_ "github.com/JulianStremel/netnoodle/internal/intel/osv"
 	_ "github.com/JulianStremel/netnoodle/internal/notify/webhook"
 	_ "github.com/JulianStremel/netnoodle/internal/source/proxmox"

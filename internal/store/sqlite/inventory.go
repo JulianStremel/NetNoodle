@@ -467,3 +467,21 @@ func (s *DB) RenameDevice(ctx context.Context, id int64, name string) error {
 	}
 	return nil
 }
+
+func (s *DB) ListAllServices(ctx context.Context) ([]store.DeviceService, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT device_id, proto, port, address, product, version, process, component, banner, confidence
+		FROM services ORDER BY device_id, port, proto`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []store.DeviceService{}
+	for rows.Next() {
+		var d store.DeviceService
+		if err := rows.Scan(&d.DeviceID, &d.Proto, &d.Port, &d.Address, &d.Product, &d.Version, &d.Process, &d.Component, &d.Banner, &d.Confidence); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}

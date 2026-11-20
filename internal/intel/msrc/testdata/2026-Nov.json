@@ -1,0 +1,50 @@
+{
+  "ProductTree": {
+    "FullProductName": [
+      {"ProductID":"client", "Value":"Windows 11 Version 24H2 for x64-based Systems"},
+      {"ProductID":"server", "Value":"Windows Server 2025 (Server Core installation)"},
+      {"ProductID":"office", "Value":"Microsoft Office 2024"}
+    ]
+  },
+  "Vulnerability": [
+    {
+      "CVE":"CVE-2026-0001",
+      "Title":{"Value":"Windows example vulnerability"},
+      "Threats":[
+        {"Type":3, "Description":{"Value":"Critical"}, "ProductID":["client"]},
+        {"Type":1, "Description":{"Value":"Publicly Disclosed:No;Exploited:Yes;Latest Software Release:Exploitation Detected"}, "ProductID":["client"]}
+      ],
+      "CVSSScoreSets":[
+        {"BaseScore":9.8, "Vector":"CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H", "ProductID":["client"]},
+        {"BaseScore":"7.5", "Vector":"server-vector", "ProductID":["server"]},
+        {"BaseScore":10, "Vector":"office-vector", "ProductID":["office"]}
+      ],
+      "Remediations":[
+        {"Type":2, "Description":{"Value":"5046617"}, "FixedBuild":"10.0.26100.2314", "ProductID":["client"], "URL":"https://support.microsoft.com/help/5046617"},
+        {"Type":2, "Description":{"Value":"9999999"}, "FixedBuild":"10.0.26100.9999", "ProductID":["office"], "URL":"https://example.invalid/office"},
+        {"Type":1, "FixedBuild":"10.0.26100.9999", "ProductID":["client"]},
+        {"Type":2, "FixedBuild":"invalid", "ProductID":["client"]}
+      ],
+      "RevisionHistory":[{"Number":"1.0", "Description":{"Value":"Initial publication"}}],
+      "Notes":[{"Value":"This field is deliberately ignored."}]
+    },
+    {
+      "CVE":"CVE-2026-0002",
+      "Title":{"Value":"Server example vulnerability"},
+      "Threats":[
+        {"Type":3, "Description":{"Value":"Important"}, "ProductID":["server"]},
+        {"Type":1, "Description":{"Value":"Publicly Disclosed:Yes;Exploited:No"}}
+      ],
+      "Remediations":[
+        {"Type":2, "Description":{"Value":"KB5049999"}, "FixedBuild":"10.0.26100.2500", "ProductID":["server"], "URL":"https://support.microsoft.com/help/5049999"}
+      ]
+    },
+    {
+      "CVE":"CVE-2026-0003",
+      "Title":{"Value":"Office only"},
+      "Remediations":[
+        {"Type":2, "FixedBuild":"10.0.26100.9000", "ProductID":["office"]}
+      ]
+    }
+  ]
+}

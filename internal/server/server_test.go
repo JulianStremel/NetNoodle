@@ -17,6 +17,13 @@ import (
 
 func newTestServer(t *testing.T) (*httptest.Server, *http.Client, string) {
 	t.Helper()
+	ts, c, pw, _ := newTestServerS(t)
+	return ts, c, pw
+}
+
+// newTestServerS also returns the *Server.
+func newTestServerS(t *testing.T) (*httptest.Server, *http.Client, string, *Server) {
+	t.Helper()
 	ctx := context.Background()
 	st, err := sqlite.Open(ctx, ":memory:")
 	if err != nil {
@@ -33,7 +40,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *http.Client, string) {
 	t.Cleanup(ts.Close)
 	c := ts.Client()
 	c.Jar, _ = cookiejar.New(nil)
-	return ts, c, pw
+	return ts, c, pw, s
 }
 
 func post(t *testing.T, c *http.Client, url, ctype, body string) *http.Response {

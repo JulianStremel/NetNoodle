@@ -16,8 +16,90 @@ function enrollHelp(role, token, fingerprint) {
     el("p", { class: "mono" }, cmd));
 }
 
+function pairHelp(r) {
+  return el("div", { class: "card" },
+    el("h2", {}, `Pair the pull agent ${r.peer.name}`),
+    el("p", {}, "On the host of the agent, run this command. Then start the service (nn-agent serve). The server connects each minute until the pairing is complete."),
+    el("p", { class: "mono" }, r.command),
+    el("p", { class: "muted" }, `The code is valid until ${fmtTime(r.expires)}. Use it one time only.`));
+}
+
+function pullCard(data, out) {
+  const card = el("div", { class: "card" });
+  const draw = (d) => {
+    const name = el("input", { placeholder: "Name, e.g. rproxy" });
+    const addr = el("input", { placeholder: "Address, e.g. 10.1.2.3:7444" });
+    const interval = el("input", { value: "1h" });
+    const msg = el("p", { class: "error" });
+    const refresh = async () => draw(await api("/api/pull-peers"));
+    const form = el("form", {
+      onsubmit: async (ev) => {
+        ev.preventDefault();
+        msg.textContent = "";
+        try {
+          const r = await api("/api/pull-peers", {
+            method: "POST",
+            body: { name: name.value.trim(), address: addr.value.trim(), interval: interval.value.trim() },
+          });
+          out.replaceChildren(pairHelp(r));
+          await refresh();
+        } catch (e) {
+          msg.textContent = e.message;
+        }
+      },
+    },
+    el("div", { class: "grid" },
+      el("label", {}, "Name", name),
+      el("label", {}, "Address (host:port)", addr),
+      el("label", {}, "Interval", interval)),
+    el("button", { type: "submit" }, "Add pull agent"), msg);
+
+    const state = (p) => {
+      if (p.disabled) return el("span", { class: "pill bad" }, "disabled");
+      if (!p.paired) return el("span", { class: "pill" }, "waiting for pairing");
+      if (p.last_error) return el("span", { class: "pill bad" }, "error");
+      return el("span", { class: "pill ok" }, "paired");
+    };
+    card.replaceChildren(el("h2", {}, `Pull agents (${d.peers.length})`),
+      el("p", { class: "muted" }, "The server connects to these agents and pulls their reports. Use pull mode when the agent's host must not connect to the server, for example in a DMZ."),
+      d.peers.length === 0 ? el("p", { class: "muted" }, "None.") :
+        table([
+          { title: "Name", key: "name" },
+          { title: "Address", render: (p) => el("span", { class: "mono" }, p.address) },
+          { title: "State", render: state },
+          { title: "Interval", key: "interval" },
+          { title: "Last pull", render: (p) => fmtTime(p.last_pull) },
+          { title: "Next", render: (p) => fmtTime(p.next_pull) },
+          { title: "Last error", render: (p) => el("span", { class: "muted" }, p.last_error || "") },
+          {
+            title: "",
+            render: (p) => el("span", {},
+              el("button", {
+                class: "link",
+                onclick: async () => {
+                  await api(`/api/pull-peers/${p.id}/pull`, { method: "POST", body: {} });
+                  setTimeout(refresh, 2000);
+                },
+              }, "Pull now"), " ",
+              el("button", {
+                class: "link",
+                title: "Removes the pinned agent certificate and makes a new pairing code",
+                onclick: async () => {
+                  out.replaceChildren(pairHelp(await api(`/api/pull-peers/${p.id}/pair`, { method: "POST", body: {} })));
+                  await refresh();
+                },
+              }, "New pairing code")),
+          },
+        ], d.peers),
+      el("p", { class: "muted" }, "Server pull certificate fingerprint: ", el("span", { class: "mono" }, d.client_fingerprint || "")),
+      form);
+  };
+  draw(data);
+  return card;
+}
+
 async function page(root) {
-  const [peers, tokens] = await Promise.all([api("/api/peers"), api("/api/join-tokens")]);
+  const [peers, tokens, pulls] = await Promise.all([api("/api/peers"), api("/api/join-tokens"), api("/api/pull-peers")]);
   const out = el("div");
   const tokensCard = el("div", { class: "card" });
   const drawTokens = (list) => tokensCard.replaceChildren(el("h2", {}, `Active join tokens (${list.length})`),
@@ -93,6 +175,8 @@ async function page(root) {
 
   root.append(tokensCard);
   drawTokens(tokens);
+  const pullOut = el("div");
+  root.append(pullCard(pulls, pullOut), pullOut);
 }
 
 registerView("peers", "Peers", page);

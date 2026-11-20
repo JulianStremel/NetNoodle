@@ -38,7 +38,7 @@ type Config struct {
 
 // DefaultMatchers and DefaultEnrichers apply when the config has no such key.
 var (
-	DefaultMatchers  = []registry.Spec{{Type: "osv", Name: "osv"}}
+	DefaultMatchers  = []registry.Spec{{Type: "osv", Name: "osv"}, {Type: "msrc", Name: "msrc"}}
 	DefaultEnrichers = []registry.Spec{{Type: "kev", Name: "kev"}, {Type: "epss", Name: "epss"}}
 )
 

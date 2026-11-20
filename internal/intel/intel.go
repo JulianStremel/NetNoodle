@@ -65,6 +65,14 @@ type Matcher interface {
 	Match(ctx context.Context, comps []proto.Component) ([]Hit, error)
 }
 
+// Refresher is implemented by plug-ins with data that is loaded on a
+// schedule. Enrichers must implement it; matchers may (for example a
+// matcher that keeps a local copy of a vendor feed).
+type Refresher interface {
+	// Refresh loads or updates the data. On error the old data stays in use.
+	Refresh(ctx context.Context) error
+}
+
 // Enricher adds facts to vulnerabilities in place.
 type Enricher interface {
 	Name() string

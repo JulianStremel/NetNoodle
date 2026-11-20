@@ -1,0 +1,42 @@
+# systemd unit for the pull-mode nn-agent.
+# Collectors can use the optional nn-agent-helper.socket for privileged reads.
+[Unit]
+Description=netnoodle pull agent (read-only inventory reports)
+After=network-online.target nn-agent-helper.socket
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/nn-agent serve
+User=nn-agent
+Group=nn-agent
+Restart=on-failure
+RestartSec=60
+
+# Permit only the server's address to connect to this agent.
+#IPAddressDeny=any
+#IPAddressAllow=<server address>
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+ReadWritePaths=/var/lib/nn-agent
+
+[Install]
+WantedBy=multi-user.target

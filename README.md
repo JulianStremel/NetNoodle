@@ -133,7 +133,7 @@ To test a scan without a server, run `bin/nn-scan scan -cidr 192.168.1.0/24`.
 
 ## Procedure: install the agent
 
-`nn-agent` operates on Linux x86_64. It only reads data. It does not listen on a network port.
+`nn-agent` operates on Linux x86_64. It only reads data. In push mode, it does not listen on a network port. For pull mode, refer to [Procedure: pull mode](#procedure-pull-mode-agent-in-a-dmz).
 
 1. Build the static binaries (Docker is necessary):
 
@@ -228,7 +228,42 @@ You need administrator rights only to install it.
 
 The agent reports the Windows version and build, the installed programs, the listening ports with their programs, and the network interfaces.
 
-> **Note:** The server does not find vulnerabilities in Windows yet. OSV has no data for Windows. Refer to [docs/design/windows-agent.md](docs/design/windows-agent.md).
+The server finds vulnerabilities of Windows itself with the `msrc` plug-in (refer to [Vulnerability data](#vulnerability-data)). It does not find vulnerabilities of other installed programs yet.
+
+## Procedure: pull mode (agent in a DMZ)
+
+Use pull mode if the host of the agent must not connect to the server. Example: the server is in the internal zone and the agent is on a reverse proxy in the DMZ. The firewall permits connections from the internal zone to the DMZ only.
+
+In pull mode, the agent listens on one port. It accepts only the pull certificate of the server (mutual TLS). The server connects to the agent and gets the report. Refer to [docs/design/pull-mode.md](docs/design/pull-mode.md).
+
+1. Install the agent program as in [Procedure: install the agent](#procedure-install-the-agent), steps 1 to 3. Do not enroll the agent.
+2. In the web interface, open **Peers**. In **Pull agents**, write the name, the address that the server connects to (`host:port`, for example `10.1.2.3:7444`) and the interval. Click **Add pull agent**.
+3. The web interface shows a command. Run it on the host of the agent:
+
+   ```sh
+   sudo -u nn-agent NN_PAIR_CODE=<code> nn-agent pair --server-fingerprint <fingerprint> --listen 10.1.2.3:7444
+   ```
+
+   The code is valid for 24 hours and only one time. Give the code in the environment variable `NN_PAIR_CODE`, so that other users cannot see it in the process list.
+4. Install and start the service:
+
+   ```sh
+   cp deploy/nn-agent-serve.service /etc/systemd/system/
+   systemctl daemon-reload
+   systemctl enable --now nn-agent-serve
+   ```
+
+   To permit connections only from the server, add `IPAddressDeny=any` and `IPAddressAllow=<server address>` to the unit.
+5. In the firewall, permit TCP from the server to the agent port.
+6. Wait one minute. The **Pull agents** table shows **paired**. Then the server pulls a report at each interval. Click **Pull now** to pull a report immediately.
+
+If you install the agent again (new key), click **New pairing code** and do step 3 again.
+
+On Windows, do the same steps with `nn-agent.exe`. Make a scheduled task that starts `nn-agent.exe serve` when the computer starts, and a firewall rule that permits the agent port only from the server address:
+
+```powershell
+New-NetFirewallRule -DisplayName "netnoodle agent" -Direction Inbound -Protocol TCP -LocalPort 7444 -RemoteAddress <server address> -Action Allow
+```
 
 ## Procedure: import from UniFi
 
@@ -295,10 +330,12 @@ The server compares the packages from the agents with vulnerability data:
 | Plug-in | Type | Data | Source |
 |---|---|---|---|
 | `osv` | Matcher | Vulnerabilities of Debian, Ubuntu, Alpine, Rocky Linux and AlmaLinux packages | `api.osv.dev` |
+| `msrc` | Matcher | Vulnerabilities of Windows (by build number), from the monthly security updates | Microsoft Security Response Center (`api.msrc.microsoft.com`) |
 | `kev` | Enricher | Vulnerabilities that attackers use (Known Exploited Vulnerabilities) | CISA |
 | `epss` | Enricher | Probability of exploitation in the next 30 days | FIRST EPSS |
 
 The server sends only package names, versions and the distribution release to OSV. It sends no host names and no addresses.
+The `msrc` plug-in sends nothing about your devices. It downloads the security update documents of the last 24 months when a Windows device is first reported.
 The server downloads the KEV and EPSS lists each day. Then it compares all devices again.
 
 To use other plug-ins or to stop the downloads, set `matchers` and `enrichers` in `netnoodle.json`. An empty list disables the plug-ins:
