@@ -379,6 +379,36 @@ The **Findings** page shows the most urgent findings first:
 
 When a new report shows a fixed version, the server closes the finding.
 
+## Actions page (decisions)
+
+For each new finding, the server decides on an action. In this version the server only records the decisions. Actors that execute actions come in a later version.
+
+1. The `rules` decider uses an ordered list of rules. The first rule that matches gives the tier and the action. The default rules:
+
+   | Rule | When | Result |
+   |---|---|---|
+   | `kev-exposed` | Known exploited (KEV) and the package has an exposed service | Approval needed: `isolate`, 24 h |
+   | `critical-exposed` | CVSS 9 or more and exposed | Approval needed: `block-port`, 24 h |
+   | `kev` | Known exploited | Notification |
+   | `high` | CVSS 7 or more | Notification |
+
+2. The guards operate after the rules. They can only make a decision safer:
+   - `protected`: a device with the tag `protected` never gets an automatic action.
+   - `scope`: an automatic action is permitted only for devices with the tag `auto` or in the configured networks.
+   - `rate`: at most 10 automatic actions in one hour.
+   - `killswitch`: when the kill switch on the **Actions** page is on, no action is automatic.
+3. An automatic action must be reversible (`isolate`, `block-port`, `stop-service`, `snapshot`) and must have a time limit (TTL). If not, it needs approval. Configuration cannot change this.
+
+The **Actions** page shows the decisions that need approval, with **Approve** and **Reject**. To set the tags of a device, open the device page.
+
+To change the rules, set `deciders` in `netnoodle.json`, for example:
+
+```json
+{ "deciders": [ { "type": "rules", "name": "rules", "settings": { "rules": [
+  { "name": "kev-dmz", "when": { "kev": true, "networks": ["172.16.0.0/24"] }, "then": { "tier": "approve", "action": "isolate", "ttl": "12h" } }
+] } } ] }
+```
+
 ## Map page
 
 The **Map** page shows all devices in one view. Select a visualization at the top:

@@ -139,3 +139,8 @@ form .grid { margin-bottom: .75rem; }
 .viz-stage { position: relative; width: 100%; height: calc(100vh - 150px); min-height: 480px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
 /* The Map page uses the full window width. */
 main:has(.viz-stage) { max-width: none; }
+
+/* Decision queue and operator tags. */
+.proposal-buttons, .proposal-counts, .tag-chips { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
+.tag-chips { margin-bottom: .75rem; }
+.proposal-buttons button { white-space: nowrap; }

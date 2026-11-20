@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/JulianStremel/netnoodle/internal/decide/rules"
 	"github.com/JulianStremel/netnoodle/internal/registry"
 )
 
@@ -28,16 +29,21 @@ type Config struct {
 	Sources   []SourceSpec    `json:"sources,omitempty"`
 	Notifiers []registry.Spec `json:"notifiers,omitempty"`
 
-	// Threat intelligence. If the keys are absent, the defaults are
-	// matcher "osv" and enrichers "kev" and "epss". An empty list disables them.
+	// Decisions default to rules and the four built-in safety guards.
+	// An explicit empty list disables the corresponding plug-ins.
+	Deciders []registry.Spec `json:"deciders"`
+	Guards   []registry.Spec `json:"guards"`
+	// Threat intelligence defaults to osv, msrc, kev and epss.
 	Matchers  []registry.Spec `json:"matchers"`
 	Enrichers []registry.Spec `json:"enrichers"`
 	// IntelRefresh is the time between feed refreshes and full re-matches. Default 24h.
 	IntelRefresh Duration `json:"intel_refresh"`
 }
 
-// DefaultMatchers and DefaultEnrichers apply when the config has no such key.
+// Default plug-in specs apply when the config has no corresponding key.
 var (
+	DefaultDeciders  = []registry.Spec{{Type: "rules", Name: "rules", Settings: rules.DefaultRules}}
+	DefaultGuards    = []registry.Spec{{Type: "protected"}, {Type: "scope"}, {Type: "rate"}, {Type: "killswitch"}}
 	DefaultMatchers  = []registry.Spec{{Type: "osv", Name: "osv"}, {Type: "msrc", Name: "msrc"}}
 	DefaultEnrichers = []registry.Spec{{Type: "kev", Name: "kev"}, {Type: "epss", Name: "epss"}}
 )
@@ -72,6 +78,12 @@ func DefaultConfig() Config {
 }
 
 func (c *Config) applyIntelDefaults() {
+	if c.Deciders == nil {
+		c.Deciders = DefaultDeciders
+	}
+	if c.Guards == nil {
+		c.Guards = DefaultGuards
+	}
 	if c.Matchers == nil {
 		c.Matchers = DefaultMatchers
 	}

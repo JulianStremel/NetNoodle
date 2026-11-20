@@ -139,6 +139,9 @@ func (s *Server) RunMaintenance(ctx context.Context, keep time.Duration) {
 		if err := s.st.PurgeObservations(ctx, now.Add(-keep)); err != nil && ctx.Err() == nil {
 			s.log.Warn("purge observations", "err", err)
 		}
+		if err := s.st.ExpireProposals(ctx, now.Add(-7*24*time.Hour)); err != nil && ctx.Err() == nil {
+			s.log.Warn("expire proposals", "err", err)
+		}
 		_ = s.st.PurgeSessions(ctx, now)
 		_ = s.st.PurgeEvents(ctx, now.Add(-eventRetention))
 		select {

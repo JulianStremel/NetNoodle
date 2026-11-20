@@ -4,6 +4,8 @@
 package plugins
 
 import (
+	_ "github.com/JulianStremel/netnoodle/internal/decide/guards"
+	_ "github.com/JulianStremel/netnoodle/internal/decide/rules"
 	_ "github.com/JulianStremel/netnoodle/internal/intel/epss"
 	_ "github.com/JulianStremel/netnoodle/internal/intel/kev"
 	_ "github.com/JulianStremel/netnoodle/internal/intel/msrc"

@@ -41,6 +41,7 @@ type GraphVuln struct {
 
 // GraphNode is one device.
 type GraphNode struct {
+	Tags       []string       `json:"tags"`
 	ID         int64          `json:"id"`
 	Name       string         `json:"name"`
 	Kind       string         `json:"kind"`
@@ -136,7 +137,7 @@ func buildGraph(devs []store.DeviceRow, fs []store.FindingRow, svcs []store.Devi
 	idx := map[int64]int{}
 	for _, d := range devs {
 		n := GraphNode{
-			ID: d.ID, Name: d.Name, Kind: d.Kind, Parent: d.ParentID, Children: []int64{},
+			Tags: append([]string{}, d.Tags...), ID: d.ID, Name: d.Name, Kind: d.Kind, Parent: d.ParentID, Children: []int64{},
 			IPs: []string{}, MACs: []string{}, Networks: []string{}, Sources: d.Sources,
 			Components: d.Components, Services: []GraphService{}, Findings: d.Findings, KEV: d.KEV,
 			MaxScore: d.MaxScore, Related: []int64{}, Top: []GraphVuln{}, LastSeen: d.LastSeen,

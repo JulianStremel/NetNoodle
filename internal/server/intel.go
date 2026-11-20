@@ -209,12 +209,16 @@ const maxHitsPerDevice = 50000
 // MatchDevice runs all matchers for one device and stores the findings.
 // A matcher that fails leaves the device's earlier findings unchanged.
 func (s *Server) MatchDevice(ctx context.Context, id int64) error {
+	s.decide.run.Lock()
+	defer s.decide.run.Unlock()
 	ms, es := s.intelPlugins()
 	comps, err := s.st.DeviceComponents(ctx, id)
 	if err != nil {
 		return err
 	}
 	var errs []string
+	openedRows := []store.FindingRow{}
+	openedKeys := map[[2]string]bool{}
 	for _, m := range ms {
 		mctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 		hits, err := m.Match(mctx, comps)
@@ -252,10 +256,34 @@ func (s *Server) MatchDevice(ctx context.Context, id int64) error {
 		if err != nil {
 			return err
 		}
+		for _, f := range opened {
+			k := [2]string{f.PURL, f.VulnID}
+			if !openedKeys[k] && len(openedRows) < maxEvaluationsPerDevice {
+				v := vulns[f.VulnID]
+				openedRows = append(openedRows, store.FindingRow{Finding: f, Aliases: v.Aliases, Summary: v.Summary, Score: v.Score, Vector: v.Vector, KEV: v.KEV, EPSS: v.EPSS, EPSSPct: v.EPSSPct, Facts: v.Facts})
+			}
+			openedKeys[k] = true
+		}
 		if len(opened) > 0 {
 			s.findingsEvent(ctx, id, m.Name(), opened, vulns)
 		}
 	}
+	if err := s.resolveDeviceProposals(ctx, id); err != nil {
+		return err
+	}
+	if len(openedRows) > 0 {
+		nodes, e := s.decisionContext(ctx)
+		if e != nil {
+			return e
+		}
+		batch := newProposalBatch()
+		e = s.evaluateFindings(ctx, openedRows, nodes, batch)
+		s.emitProposalBatch(ctx, batch)
+		if e != nil {
+			return e
+		}
+	}
+
 	if len(errs) > 0 {
 		return fmt.Errorf("%s", strings.Join(errs, "; "))
 	}

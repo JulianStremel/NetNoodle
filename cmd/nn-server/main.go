@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/JulianStremel/netnoodle/internal/decide"
 	"github.com/JulianStremel/netnoodle/internal/intel"
 	"github.com/JulianStremel/netnoodle/internal/notify"
 	_ "github.com/JulianStremel/netnoodle/internal/plugins" // built-in plug-ins
@@ -92,6 +93,15 @@ func run() error {
 		return err
 	}
 	srv.SetIntel(matchers, enrichers)
+	deciders, err := registry.BuildAll(decide.Deciders, cfg.Deciders)
+	if err != nil {
+		return err
+	}
+	guards, err := registry.BuildAll(decide.Guards, cfg.Guards)
+	if err != nil {
+		return err
+	}
+	srv.SetDecide(deciders, guards)
 	go srv.RunIntel(ctx, cfg.IntelRefresh.Duration)
 	if err := srv.RunSources(ctx, cfg.Sources); err != nil {
 		return err

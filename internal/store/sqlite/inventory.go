@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -202,6 +203,14 @@ func (t *invTx) Merge(keep, drop int64) error {
 	if err != nil {
 		return err
 	}
+	// Preserve the entire union or leave both devices intact; never discard labels.
+	var tagCount int
+	if err := t.tx.QueryRowContext(t.ctx, `SELECT COUNT(DISTINCT tag) FROM device_tags WHERE device_id IN (?,?)`, keep, drop).Scan(&tagCount); err != nil {
+		return err
+	}
+	if tagCount > 32 {
+		return fmt.Errorf("%w: merged device would exceed 32 tags", store.ErrConflict)
+	}
 	if k.kind == string(proto.KindUnknown) {
 		k.kind = d.kind
 	}
@@ -240,6 +249,11 @@ func (t *invTx) Merge(keep, drop int64) error {
 		{`UPDATE OR IGNORE services SET device_id = ? WHERE device_id = ?`, []any{keep, drop}},
 		{`UPDATE OR IGNORE device_sources SET device_id = ? WHERE device_id = ?`, []any{keep, drop}},
 		{`UPDATE devices SET parent_id = ? WHERE parent_id = ? AND id <> ?`, []any{keep, drop, keep}},
+		{`INSERT OR IGNORE INTO device_tags(device_id,tag) SELECT ?,tag FROM device_tags WHERE device_id=?`, []any{keep, drop}},
+		// Keep both histories. Close only colliding open proposals before moving.
+		{`UPDATE proposals SET state='resolved',updated_at=? WHERE device_id=? AND state IN ('pending','auto') AND EXISTS (SELECT 1 FROM proposals d WHERE d.device_id=? AND d.vuln_id=proposals.vuln_id AND d.action=proposals.action AND (d.state='approved' OR (d.state='pending' AND proposals.state='auto')))`, []any{ts(time.Now()), keep, drop}},
+		{`UPDATE proposals SET state='resolved',updated_at=? WHERE device_id=? AND state IN ('pending','approved','auto') AND EXISTS (SELECT 1 FROM proposals k WHERE k.device_id=? AND k.vuln_id=proposals.vuln_id AND k.action=proposals.action AND k.state IN ('pending','approved','auto'))`, []any{ts(time.Now()), drop, keep}},
+		{`UPDATE proposals SET device_id=? WHERE device_id=?`, []any{keep, drop}},
 		{`DELETE FROM devices WHERE id = ?`, []any{drop}},
 		{`UPDATE devices SET kind = ?, name = ?, parent_id = ?, attributes = ?, interfaces = ?, first_seen = ?, last_seen = ? WHERE id = ?`,
 			[]any{k.kind, k.name, k.parent, k.attrs, k.ifaces, k.first, k.last, keep}},
@@ -339,6 +353,7 @@ func (s *DB) ListDevices(ctx context.Context) ([]store.DeviceRow, error) {
 		r.FirstSeen, r.LastSeen = parseTS(first), parseTS(last)
 		r.Identifiers = []proto.Identifier{}
 		r.Sources = []string{}
+		r.Tags = []string{}
 		byID[r.ID] = len(out)
 		out = append(out, r)
 	}
@@ -382,7 +397,26 @@ func (s *DB) ListDevices(ctx context.Context) ([]store.DeviceRow, error) {
 			out[i].Sources = append(out[i].Sources, src)
 		}
 	}
-	return out, srcs.Err()
+	if err := srcs.Err(); err != nil {
+		return nil, err
+	}
+	srcs.Close()
+	tags, err := s.db.QueryContext(ctx, `SELECT device_id,tag FROM device_tags ORDER BY device_id,tag`)
+	if err != nil {
+		return nil, err
+	}
+	defer tags.Close()
+	for tags.Next() {
+		var id int64
+		var tag string
+		if err := tags.Scan(&id, &tag); err != nil {
+			return nil, err
+		}
+		if i, ok := byID[id]; ok {
+			out[i].Tags = append(out[i].Tags, tag)
+		}
+	}
+	return out, tags.Err()
 }
 
 func (s *DB) GetDevice(ctx context.Context, id int64) (store.DeviceDetail, error) {
@@ -467,7 +501,8 @@ func (s *DB) GetDevice(ctx context.Context, id int64) (store.DeviceDetail, error
 		}); err != nil {
 		return d, err
 	}
-	return d, nil
+	d.Tags, err = s.Tags(ctx, id)
+	return d, err
 }
 
 // RenameDevice sets the display name of a device.

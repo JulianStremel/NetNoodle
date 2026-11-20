@@ -29,6 +29,7 @@ type Server struct {
 	bcryptSem   chan struct{}
 	peerRate    *rateLimiter
 	reserved    map[string]bool
+	decide      *decideState
 	intel       *intelState
 	pull        *pullState
 	now         func() time.Time
@@ -49,6 +50,7 @@ func New(cfg Config, st store.Store, ui fs.FS, fingerprint string, log *slog.Log
 		peerRate:    newRateLimiter(60, 10*time.Minute),
 		reserved:    reservedNames(cfg),
 		intel:       newIntelState(),
+		decide:      newDecideState(),
 		pull:        newPullState(),
 		now:         time.Now,
 	}
@@ -87,6 +89,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/join-tokens", requireUser(s.handleListJoinTokens))
 	mux.HandleFunc("POST /api/join-tokens", requireUser(s.handleCreateJoinToken))
 	mux.HandleFunc("DELETE /api/join-tokens/{id}", requireUser(s.handleDeleteJoinToken))
+
+	mux.HandleFunc("PUT /api/devices/{id}/tags", requireUser(s.handleSetTags))
+	mux.HandleFunc("GET /api/proposals", requireUser(s.handleProposals))
+	mux.HandleFunc("POST /api/proposals/reevaluate", requireUser(s.handleReevaluate))
+	mux.HandleFunc("POST /api/proposals/{id}/approve", requireUser(s.handleProposalDecision("approved")))
+	mux.HandleFunc("POST /api/proposals/{id}/reject", requireUser(s.handleProposalDecision("rejected")))
+	mux.HandleFunc("GET /api/decide/settings", requireUser(s.handleDecideSettings))
+	mux.HandleFunc("PUT /api/decide/settings", requireUser(s.handleSetDecideSettings))
 
 	// Static UI. Unknown /api/ and /v1/ paths get a JSON 404, not a page.
 	files := http.FileServerFS(s.ui)

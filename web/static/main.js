@@ -4,6 +4,7 @@ import { start } from "./app.js";
 import "./map.js";
 import "./findings.js";
 import "./devices.js";
+import "./actions.js";
 import "./peers.js";
 
 start();

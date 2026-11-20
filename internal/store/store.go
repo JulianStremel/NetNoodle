@@ -7,9 +7,11 @@ import (
 	"errors"
 	"time"
 
+	"fmt"
 	"github.com/JulianStremel/netnoodle/internal/intel"
 	"github.com/JulianStremel/netnoodle/internal/inventory"
 	"github.com/JulianStremel/netnoodle/internal/proto"
+	"regexp"
 )
 
 var (
@@ -148,6 +150,7 @@ type DeviceRef struct {
 
 // DeviceRow is one line of the device list.
 type DeviceRow struct {
+	Tags        []string           `json:"tags"`
 	ID          int64              `json:"id"`
 	Kind        string             `json:"kind"`
 	Name        string             `json:"name"`
@@ -198,6 +201,7 @@ type DeviceService struct {
 
 // DeviceDetail is the full record of one device.
 type DeviceDetail struct {
+	Tags       []string          `json:"tags"`
 	ID         int64             `json:"id"`
 	Kind       string            `json:"kind"`
 	Name       string            `json:"name"`
@@ -304,5 +308,69 @@ type Store interface {
 	Pulls
 	Inventory
 	Intel
+	Tags
+	Settings
+	Proposals
 	Close() error
+}
+
+// Tags are operator-owned labels; reports cannot change them.
+type Tags interface {
+	SetTags(context.Context, int64, []string) error
+	Tags(context.Context, int64) ([]string, error)
+}
+
+var tagPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,31}$`)
+
+func ValidateTags(tags []string) error {
+	if len(tags) > 32 {
+		return fmt.Errorf("at most 32 tags per device")
+	}
+	for _, t := range tags {
+		if !tagPattern.MatchString(t) {
+			return fmt.Errorf("invalid tag %q", t)
+		}
+	}
+	return nil
+}
+
+type Settings interface {
+	GetSetting(context.Context, string) (string, error)
+	SetSetting(context.Context, string, string) error
+}
+type Proposal struct {
+	ID          int64          `json:"id"`
+	DeviceID    int64          `json:"device_id"`
+	DeviceName  string         `json:"device_name"`
+	VulnID      string         `json:"vuln_id"`
+	PURL        string         `json:"purl"`
+	Action      string         `json:"action"`
+	Tier        string         `json:"tier"`
+	State       string         `json:"state"`
+	Reason      string         `json:"reason"`
+	DecidedBy   []string       `json:"decided_by"`
+	Params      map[string]any `json:"params"`
+	TTL         int64          `json:"ttl_s"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
+	ExpiresAt   time.Time      `json:"expires_at,omitzero"`
+	DecidedUser string         `json:"decided_user"`
+	DecidedAt   time.Time      `json:"decided_at,omitzero"`
+}
+type ProposalFilter struct {
+	State    string
+	DeviceID int64
+	Limit    int
+}
+type Proposals interface {
+	OpenVulnIDs(context.Context, int64) ([]string, error)
+	// UpsertProposal returns the saved record and whether it was inserted or changed state.
+	// Approved decisions retain their reviewed scope until M6.
+	UpsertProposal(context.Context, Proposal) (Proposal, bool, error)
+	ListProposals(context.Context, ProposalFilter) ([]Proposal, error)
+	GetProposal(context.Context, int64) (Proposal, error)
+	DecideProposal(context.Context, int64, string, string, time.Time) error
+	// ExpireProposals closes pending proposals created before the cutoff.
+	ExpireProposals(context.Context, time.Time) error
+	ResolveProposals(context.Context, int64, []string) error
 }

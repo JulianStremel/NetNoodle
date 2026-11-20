@@ -94,6 +94,29 @@ async function detail(root, id) {
       `First seen ${fmtTime(d.first_seen)} · last seen ${fmtTime(d.last_seen)}`,
       d.parent_id ? [" · parent ", el("a", { href: `#/devices/${d.parent_id}` }, `#${d.parent_id}`)] : "")));
 
+  let tags = [...d.tags];
+  const chips = el("div", { class: "tag-chips" });
+  const tagInput = el("input", { placeholder: "Add a tag", maxlength: "32", "aria-label": "Device tag" });
+  const tagMessage = el("p", { class: "muted", role: "status" });
+  const drawTags = () => chips.replaceChildren(...tags.map((tag) => el("span", { class: "chip" }, tag,
+    el("button", { type: "button", class: "link", "aria-label": `Remove ${tag}`, onclick: () => { tags = tags.filter((t) => t !== tag); tagMessage.textContent = "Unsaved changes"; drawTags(); } }, " x"))));
+  const addTag = () => {
+    const tag = tagInput.value.trim();
+    if (!/^[a-z0-9][a-z0-9._-]{0,31}$/.test(tag)) { tagMessage.textContent = "Use 1-32 lower-case letters, numbers, dots, underscores or hyphens."; return false; }
+    if (tags.length >= 32 && !tags.includes(tag)) { tagMessage.textContent = "At most 32 tags per device."; return false; }
+    tags = [...new Set([...tags, tag])]; tagInput.value = ""; tagMessage.textContent = "Unsaved changes"; drawTags(); return true;
+  };
+  const tagForm = el("form", { onsubmit: async (event) => {
+    event.preventDefault();
+    if (tagInput.value.trim() && !addTag()) return;
+    try { const result = await api(`/api/devices/${id}/tags`, { method: "PUT", body: { tags } }); tags = result.tags; drawTags(); tagMessage.textContent = "Saved"; }
+    catch (e) { tagMessage.textContent = e.message; }
+  } }, chips, el("div", { class: "row" }, tagInput,
+    el("button", { type: "button", class: "secondary", onclick: addTag }, "Add tag"), el("button", { type: "submit" }, "Save tags")), tagMessage);
+  drawTags();
+  root.append(el("div", { class: "card" }, el("h2", {}, "Tags"),
+    el("p", { class: "muted" }, "protected requires approval for automatic actions. auto opts this device into automatic proposals."), tagForm));
+
   root.append(el("div", { class: "card" }, el("h2", {}, "Identifiers"),
     table([
       { title: "Kind", key: "kind" },
