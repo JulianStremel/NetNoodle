@@ -194,6 +194,15 @@ func normalizeEntity(e *proto.Entity, depth int) bool {
 	for i := range e.Interfaces {
 		in := &e.Interfaces[i]
 		in.Name = CleanText(in.Name, 64)
+		// Only known values; anything else is dropped (reported data).
+		switch in.VPN {
+		case "tailscale", "wireguard", "zerotier", "tun":
+		default:
+			in.VPN = ""
+		}
+		if in.Kind != "vpn" {
+			in.Kind, in.VPN = "", ""
+		}
 		if in.MAC != "" {
 			if mac, _, err := NormalizeMAC(in.MAC); err == nil {
 				in.MAC = mac

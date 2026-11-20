@@ -57,7 +57,9 @@
       "properties": {
         "name": { "type": "string" },
         "mac": { "type": "string" },
-        "ips": { "type": "array", "items": { "type": "string" } }
+        "ips": { "type": "array", "items": { "type": "string" } },
+        "kind": { "enum": ["vpn"], "description": "Set for a VPN or overlay interface; absent for a normal interface." },
+        "vpn": { "enum": ["tailscale", "wireguard", "zerotier", "tun"], "description": "Kind of VPN when kind is vpn." }
       }
     },
     "entity": {

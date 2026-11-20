@@ -77,6 +77,8 @@ type Interface struct {
 	Name string   `json:"name,omitempty"`
 	MAC  string   `json:"mac,omitempty"`
 	IPs  []string `json:"ips,omitempty"`
+	Kind string   `json:"kind,omitempty"` // "vpn" for a VPN or overlay interface
+	VPN  string   `json:"vpn,omitempty"`  // tailscale | wireguard | zerotier | tun
 }
 
 // Entity is one observed thing plus, optionally, its children
