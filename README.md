@@ -195,6 +195,28 @@ The helper is a separate program with two capabilities: `CAP_SYS_PTRACE` and `CA
 It has no input. It only gives the programs of listening sockets.
 Only members of the group `nn-agent` can connect to it. The agent itself keeps no capabilities.
 
+Procedure: report the packages of containers (optional)
+
+On a host with LXC containers (for example Proxmox VE) or Docker or Podman containers, the agent can report the running containers as children of the host: operating system, packages, listening ports and interfaces. Then the server finds vulnerabilities in the containers, and the **Map** page shows them next to their host.
+
+1. Install the helper program as in the procedure above (step 1).
+2. Install the units:
+
+   ```sh
+   cp deploy/nn-agent-helper-containers.socket deploy/nn-agent-helper-containers@.service /etc/systemd/system/
+   systemctl daemon-reload
+   systemctl enable --now nn-agent-helper-containers.socket
+   ```
+
+The helper uses the same two capabilities. It does not use the Docker socket and it does not start programs in the containers. It reads only these files of each running container: `os-release`, `hostname`, the dpkg or apk package database, and the network tables in `/proc`. It opens them with `openat2` and `RESOLVE_IN_ROOT`, so a link in a container cannot point to a file of the host.
+
+Limits:
+
+- Stopped containers are not read.
+- Packages of RPM-based containers are not read (only the operating system).
+- The ports of a container show the program name, but not the package of the program.
+- Virtual machines (QEMU) are not read from the host. Install the agent in the virtual machine.
+
 ## Procedure: install the agent on Windows
 
 `nn-agent` operates on Windows 10, Windows 11 and Windows Server (x64). It does not need administrator rights to collect data.

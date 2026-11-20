@@ -1,0 +1,19 @@
+Main:
+  +-- 0.0.0.0/0 2 0 2
+     |-- 0.0.0.0
+        /0 universe UNICAST
+     |-- 10.42.0.7
+        /32 host LOCAL
+     |-- 10.42.0.255
+        /32 link BROADCAST
+     |-- 127.0.0.1
+        /32 host LOCAL
+     |-- 192.0.2.8
+        /32 host LOCAL
+Local:
+     |-- 10.42.0.7
+        /32 host LOCAL
+     |-- 127.1.2.3
+        /32 host LOCAL
+     |-- not-an-ip
+        /32 host LOCAL

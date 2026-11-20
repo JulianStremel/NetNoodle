@@ -1,0 +1,16 @@
+# Optional helper for packages and network inventory of running containers.
+# Only members of the group nn-agent can connect; the helper reads no input.
+[Unit]
+Description=netnoodle container helper socket
+
+[Socket]
+ListenStream=/run/nn-agent-helper-containers.sock
+Accept=yes
+SocketUser=root
+SocketGroup=nn-agent
+SocketMode=0660
+MaxConnections=2
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

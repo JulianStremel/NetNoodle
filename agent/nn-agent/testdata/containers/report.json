@@ -1,0 +1,14 @@
+[
+  {
+    "id": "lxc/101",
+    "name": "web1",
+    "attributes": {"os.id": "debian", "os.version": "12", "os.name": "Debian GNU/Linux 12"},
+    "components": [{"purl": "pkg:deb/debian/example@1?distro=debian-12", "name": "example", "version": "1", "confidence": "high"}],
+    "services": [{"port": 80, "proto": "tcp", "address": "0.0.0.0", "process": "nginx", "confidence": "high"}],
+    "interfaces": [
+      {"name": "eth0", "mac": "02:00:00:00:00:07", "ips": ["10.42.0.7", "2001:db8::7"]},
+      {"name": "eth0", "mac": "02:00:00:00:00:07", "ips": ["10.42.0.7"]}
+    ],
+    "errors": ["test error"]
+  }
+]

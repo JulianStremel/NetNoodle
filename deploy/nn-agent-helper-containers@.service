@@ -1,0 +1,50 @@
+# One run per connection on /run/nn-agent-helper-containers.sock.
+# Same capabilities and hardening as the socket-owner helper.
+[Unit]
+Description=netnoodle agent helper (running container inventory)
+
+[Service]
+ExecStart=/usr/local/bin/nn-agent-helper containers
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+RuntimeMaxSec=120
+
+DynamicUser=yes
+AmbientCapabilities=CAP_SYS_PTRACE CAP_DAC_READ_SEARCH
+CapabilityBoundingSet=CAP_SYS_PTRACE CAP_DAC_READ_SEARCH
+NoNewPrivileges=yes
+
+# CAP_SYS_PTRACE is needed for the /proc access checks only. These system
+# calls are blocked, so the helper cannot attach to processes, copy their
+# memory or file descriptors, or open files by handle (which would pass by
+# InaccessiblePaths). Reading /proc/<pid>/mem with read(2) stays possible
+# with the capability; the helper code never does it and reads no input.
+SystemCallFilter=@system-service
+SystemCallFilter=~ptrace process_vm_readv process_vm_writev pidfd_getfd kcmp open_by_handle_at name_to_handle_at
+SystemCallArchitectures=native
+
+# CAP_DAC_READ_SEARCH could read any file. Hide what the helper never needs.
+# /var/lib stays inaccessible on the HOST. Container files are read only
+# through /proc/<pid>/root, which reaches the container's other mount namespace.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+InaccessiblePaths=-/etc/shadow -/etc/gshadow -/etc/ssh -/root -/var/lib -/srv
+
+# No network. The helper writes only to the socket that systemd gives it.
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes

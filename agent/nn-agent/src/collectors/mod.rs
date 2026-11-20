@@ -2,6 +2,8 @@
 //! [`Collector`] in a new module and add it to [`all`].
 
 mod apk;
+#[cfg(any(target_os = "linux", test))]
+pub mod containers;
 mod dpkg;
 mod interfaces;
 mod os;
@@ -37,6 +39,8 @@ pub fn linux() -> Vec<Box<dyn Collector>> {
         Box::new(rpm::Rpm),
         Box::new(apk::Apk),
         Box::new(sockets::Sockets),
+        #[cfg(target_os = "linux")]
+        Box::new(containers::Containers),
     ]
 }
 

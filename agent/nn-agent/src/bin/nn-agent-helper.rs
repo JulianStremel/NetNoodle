@@ -1,10 +1,11 @@
 //! nn-agent-helper: prints the program of each listening socket as JSON.
 //!
 //! This program runs with CAP_SYS_PTRACE and CAP_DAC_READ_SEARCH, so it can
-//! read /proc/<pid>/fd and /proc/<pid>/exe of all processes. It has no
-//! arguments and reads no input. It only prints data about processes that
-//! own listening TCP or unconnected UDP sockets. systemd starts it for each
+//! read /proc/<pid>/fd and /proc/<pid>/exe of all processes. With no argument,
+//! it prints data about processes that own listening TCP or unconnected UDP
+//! sockets. It reads no input. systemd starts it for each
 //! connection on /run/nn-agent-helper.sock (see deploy/nn-agent-helper.socket).
+//! The single argument `containers` selects the separate container helper socket.
 
 use nn_agent::collector::Ctx;
 use nn_agent::collectors::{sockets, sockowner};
@@ -13,9 +14,14 @@ use std::io::Write;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    if std::env::args_os().len() > 1 {
-        eprintln!("usage: nn-agent-helper (no arguments; prints JSON to stdout)");
-        return ExitCode::from(2);
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    match args.as_slice() {
+        [] => {}
+        [mode] if mode == "containers" => return containers(),
+        _ => {
+            eprintln!("usage: nn-agent-helper [containers] (prints JSON to stdout)");
+            return ExitCode::from(2);
+        }
     }
     let ctx = Ctx::new("/".into());
     let listening: HashSet<u64> = match sockets::listening(&ctx) {
@@ -37,4 +43,29 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
+}
+
+fn containers() -> ExitCode {
+    #[cfg(target_os = "linux")]
+    {
+        match nn_agent::collectors::containers::helper_json() {
+            Ok(out) => {
+                let mut stdout = std::io::stdout().lock();
+                if stdout.write_all(&out).and_then(|_| stdout.flush()).is_ok() {
+                    ExitCode::SUCCESS
+                } else {
+                    ExitCode::FAILURE
+                }
+            }
+            Err(e) => {
+                eprintln!("nn-agent-helper containers: {e}");
+                ExitCode::FAILURE
+            }
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        eprintln!("nn-agent-helper containers: requires Linux");
+        ExitCode::FAILURE
+    }
 }
