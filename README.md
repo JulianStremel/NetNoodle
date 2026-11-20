@@ -352,6 +352,33 @@ The **Findings** page shows the most urgent findings first:
 
 When a new report shows a fixed version, the server closes the finding.
 
+## Map page
+
+The **Map** page shows all devices in one view. Select a visualization at the top:
+
+| View | What it shows |
+|---|---|
+| Radar | The riskiest devices are near the center. Each sector is a network. Guests are near their host. |
+| City | Each network is a district and each device is a building. Height shows the number of packages, color shows the risk. A red beacon shows a known exploited vulnerability (KEV). |
+| Flow | The path from a vulnerability to the package, the exposed service, the device, the host and the network. |
+
+Click a device to see its blast radius: its host, its guests and the other guests of the same host. A compromise of one of them can affect the others. Double-click a device to open its page.
+
+The risk of a device (0 to 10) comes from its worst open finding: 70 % of the CVSS score, plus 2 if attackers use the vulnerability (KEV), plus 1 if the package has a network service that listens on an address other than loopback, plus the EPSS probability.
+
+## Procedure: try netnoodle with demo data
+
+`nn-demo` makes a data directory with an invented network (Proxmox hosts with guests, a DMZ, clients and IoT devices, with findings). Use it to look at the web interface without real data.
+
+1. Make the demo data:
+
+   ```sh
+   go run ./cmd/nn-demo -data ./demo-data
+   ```
+
+2. Write `demo.json` with `{"data_dir": "./demo-data", "matchers": [], "enrichers": []}`. The empty lists stop the vulnerability downloads, so the invented findings stay.
+3. Start the server with `go run ./cmd/nn-server -config demo.json`. Log in with the password that the server shows.
+
 ## Certificate fingerprint
 
 The server makes a self-signed TLS certificate on the first start.
