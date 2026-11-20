@@ -14,6 +14,7 @@ import (
 
 	"github.com/JulianStremel/netnoodle/internal/actor"
 	_ "github.com/JulianStremel/netnoodle/internal/actor/logactor"
+	_ "github.com/JulianStremel/netnoodle/internal/actor/unifiactor"
 	"github.com/JulianStremel/netnoodle/internal/client"
 )
 

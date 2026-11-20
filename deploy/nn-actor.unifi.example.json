@@ -1,0 +1,25 @@
+{
+  "credentials": "nn-actor-creds.json",
+  "nonce_file": "nn-actor-nonces.json",
+  "dry_run": true,
+  "max_per_hour": 20,
+  "backends": [
+    {
+      "type": "unifi",
+      "name": "unifi",
+      "settings": {
+        "url": "https://10.0.0.1",
+        "api_key_file": "/etc/netnoodle/unifi-api-key",
+        "fingerprint": "REPLACE_WITH_CONTROLLER_CERTIFICATE_SHA256_HEX",
+        "insecure_skip_verify": false,
+        "site": "default",
+        "classic_path": "/proxy/network/api",
+        "never_block": ["aa:bb:cc:dd:ee:ff"]
+      }
+    }
+  ],
+  "allow": [
+    {"action": "isolate", "targets": ["mac=02:00:00:*"]},
+    {"action": "unisolate", "targets": ["mac=02:00:00:*"]}
+  ]
+}

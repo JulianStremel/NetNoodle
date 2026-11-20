@@ -427,6 +427,13 @@ An actor executes approved actions. In this version, `nn-actor` has only the `lo
    - `max_per_hour` limits the orders (default 20).
 4. Start the actor: `nn-actor run -config /etc/nn-actor/actor.json`.
 
+Backend `unifi` (block a client in UniFi Network, action `isolate`, revert `unisolate`): refer to [deploy/nn-actor.unifi.example.json](deploy/nn-actor.unifi.example.json).
+
+- Make a local API key on the UniFi console and write it to a file that only the actor can read (`api_key_file`).
+- Write the SHA-256 fingerprint of the console certificate in `fingerprint`.
+- Write the MAC addresses that must never be blocked (gateway, your administrator computer) in `never_block`. The backend also refuses to block UniFi devices.
+- The backend uses the command `block-sta` of the classic Network API. Ubiquiti does not document this command. Test it with `dry_run: false` on a client that is not important before you use it.
+
 When you approve a decision on the **Actions** page, the server sends an order to an actor that can do the action for the device. The **Actions** page shows the state of the order. After the TTL, the server sends the revert order.
 
 ## Map page
