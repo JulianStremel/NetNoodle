@@ -197,8 +197,6 @@ func (s *Server) handleSetDecideSettings(w http.ResponseWriter, r *http.Request)
 	}
 	u, _ := userFrom(r.Context())
 	s.event(r.Context(), "decide.killswitch", u.Name, "kill switch "+v)
-	if s.mqtt != nil {
-		s.mqtt.Trigger()
-	}
+	s.triggerMQTT()
 	writeJSON(w, 200, map[string]bool{"killswitch": *req.Killswitch})
 }

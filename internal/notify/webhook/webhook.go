@@ -19,13 +19,19 @@ import (
 )
 
 func init() {
-	notify.Registry.Register("webhook", New)
+	notify.Registry.RegisterWithSchema("webhook", New, registry.Schema{Fields: []registry.Field{
+		{Key: "url", Label: "Webhook URL", Type: "url", Required: true},
+		{Key: "headers_json", Label: "Headers (JSON object)", Type: "secret", Help: "Optional HTTP headers, for example an Authorization header. Leave empty to keep."},
+		{Key: "types", Label: "Event prefixes", Type: "list", Help: "Empty sends all events."},
+		{Key: "format", Label: "Format", Type: "string", Default: "json", Help: "json or slack."},
+	}})
 }
 
 // Settings for the webhook notifier.
 type Settings struct {
-	URL     string            `json:"url"`
-	Headers map[string]string `json:"headers,omitempty"`
+	HeadersJSON string            `json:"headers_json,omitempty"`
+	URL         string            `json:"url"`
+	Headers     map[string]string `json:"headers,omitempty"`
 	// Types limits the event types sent (prefix match, e.g. "device.").
 	// Empty means all.
 	Types []string `json:"types,omitempty"`
@@ -47,6 +53,11 @@ func New(name string, raw json.RawMessage) (notify.Notifier, error) {
 	var s Settings
 	if err := registry.Decode(raw, &s); err != nil {
 		return nil, err
+	}
+	if s.HeadersJSON != "" {
+		if err := json.Unmarshal([]byte(s.HeadersJSON), &s.Headers); err != nil {
+			return nil, fmt.Errorf("invalid headers")
+		}
 	}
 	if err := tlspin.CheckURL(s.URL, s.AllowHTTP); err != nil {
 		return nil, err
@@ -75,7 +86,7 @@ func (h *hook) wants(t string) bool {
 }
 
 func (h *hook) Notify(ctx context.Context, e notify.Event) error {
-	if !h.wants(e.Type) {
+	if e.Type != "integration.test" && !h.wants(e.Type) {
 		return nil
 	}
 	var body any = e

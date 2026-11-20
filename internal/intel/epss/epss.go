@@ -32,7 +32,9 @@ const (
 	maxRows         = 2000000
 )
 
-func init() { intel.Enrichers.Register("epss", New) }
+func init() {
+	intel.Enrichers.RegisterWithSchema("epss", New, registry.Schema{Fields: []registry.Field{{Key: "url", Label: "Scores URL", Type: "url", Default: defaultURL}}})
+}
 
 // Settings configures the scores endpoint.
 type Settings struct {

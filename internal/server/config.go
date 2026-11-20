@@ -32,6 +32,7 @@ type Config struct {
 	// Sources also take an "interval" (default 10m).
 	Sources   []SourceSpec    `json:"sources,omitempty"`
 	Notifiers []registry.Spec `json:"notifiers,omitempty"`
+	LLMs      []registry.Spec `json:"llms,omitempty"`
 	// MQTT enables discovery and event publishing when present; absent is disabled.
 	MQTT json.RawMessage `json:"mqtt,omitempty"`
 

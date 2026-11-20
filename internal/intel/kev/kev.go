@@ -21,7 +21,9 @@ const maxEntries = 100000
 const defaultURL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
 const maxBodySize = 16 << 20 // the catalog is about 1.5 MB (security review 2026-11-20)
 
-func init() { intel.Enrichers.Register("kev", New) }
+func init() {
+	intel.Enrichers.RegisterWithSchema("kev", New, registry.Schema{Fields: []registry.Field{{Key: "url", Label: "Catalog URL", Type: "url", Default: defaultURL}}})
+}
 
 // Settings configures the catalog endpoint.
 type Settings struct {

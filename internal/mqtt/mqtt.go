@@ -29,6 +29,7 @@ type Settings struct {
 	Broker          string `json:"broker"`
 	AllowPlain      bool   `json:"allow_plain"`
 	Username        string `json:"username"`
+	Password        string `json:"password"`
 	PasswordFile    string `json:"password_file"`
 	ClientID        string `json:"client_id"`
 	TopicPrefix     string `json:"topic_prefix"`
@@ -78,6 +79,7 @@ const queueSize = 256
 const debounce = 5 * time.Second
 
 type Publisher struct {
+	name                       string
 	s                          Settings
 	broker, password, identity string
 	interval                   time.Duration
@@ -140,7 +142,7 @@ func New(raw json.RawMessage, provider Provider) (*Publisher, error) {
 	if s.ClientID == "" || len(s.ClientID) > 256 || strings.ContainsAny(s.ClientID, "\x00\r\n") || s.DeviceTag == "" || len(s.DeviceTag) > 256 || !validPrefix(s.TopicPrefix) || !validPrefix(s.DiscoveryPrefix) {
 		return nil, errors.New("mqtt: invalid client_id, device_tag or topic prefix")
 	}
-	password := ""
+	password := s.Password
 	if s.PasswordFile != "" {
 		b, err := os.ReadFile(s.PasswordFile)
 		if err != nil {
@@ -187,7 +189,7 @@ func (p *Publisher) Trigger() {
 // Notify copies the event's scalar fields into a bounded drop-oldest queue.
 // Fields are intentionally excluded from the public event payload.
 func (p *Publisher) Notify(_ context.Context, e notify.Event) error {
-	if !p.allowEvents[e.Type] {
+	if e.Type != "integration.test" && !p.allowEvents[e.Type] {
 		return nil
 	}
 	e.Fields = nil
@@ -216,7 +218,12 @@ func (p *Publisher) Notify(_ context.Context, e notify.Event) error {
 	return nil
 }
 
-func (p *Publisher) Name() string { return "mqtt" }
+func (p *Publisher) Name() string {
+	if p.name != "" {
+		return p.name
+	}
+	return "mqtt"
+}
 
 func waitToken(ctx context.Context, t paho.Token) bool {
 	select {
@@ -467,4 +474,48 @@ func genericTitle(eventType string) string {
 		return t
 	}
 	return eventType
+}
+
+// BindProvider is called before Run starts, to attach the server inventory.
+func (p *Publisher) BindProvider(provider Provider) { p.provider = provider }
+
+func init() {
+	notify.Registry.RegisterWithSchema("mqtt", func(name string, raw json.RawMessage) (notify.Notifier, error) {
+		p, err := New(raw, func(context.Context) (Snapshot, error) { return Snapshot{}, nil })
+		if err == nil {
+			p.name = name
+		}
+		return p, err
+	}, registry.Schema{Fields: []registry.Field{
+		{Key: "broker", Label: "Broker", Type: "string", Required: true, Help: "mqtts://host:8883; mqtt:// only for loopback or with Allow plaintext."},
+		{Key: "username", Label: "Username", Type: "string"},
+		{Key: "password", Label: "Password", Type: "secret"},
+		{Key: "allow_plain", Label: "Allow plaintext", Type: "bool", Default: false},
+		{Key: "client_id", Label: "Client ID", Type: "string", Default: "netnoodle", Help: "Use a unique ID for each publisher."},
+		{Key: "topic_prefix", Label: "Topic prefix", Type: "string", Default: "netnoodle"},
+		{Key: "discovery_prefix", Label: "Discovery prefix", Type: "string", Default: "homeassistant"},
+		{Key: "interval", Label: "Snapshot interval", Type: "duration", Default: "60s"},
+		{Key: "device_tag", Label: "Device tag", Type: "string", Default: "ha"},
+		{Key: "events", Label: "Event types", Type: "list", Default: defaultEvents},
+		{Key: "event_details", Label: "Send event details", Type: "bool", Default: false},
+		{Key: "fingerprint", Label: "Certificate fingerprint", Type: "fingerprint"},
+	}})
+}
+
+// Test connects once and waits for acknowledgement of just this test event.
+// It sends no discovery, inventory, availability or retained messages.
+func (p *Publisher) Test(ctx context.Context, e notify.Event) error {
+	opts := paho.NewClientOptions().AddBroker(p.broker).SetClientID(p.s.ClientID + "-test").
+		SetUsername(p.s.Username).SetPassword(p.password).SetAutoReconnect(false).
+		SetConnectRetry(false).SetConnectTimeout(5 * time.Second).SetWriteTimeout(5 * time.Second).SetTLSConfig(p.tls)
+	c := paho.NewClient(opts)
+	defer c.Disconnect(0)
+	if !waitToken(ctx, c.Connect()) {
+		return errors.New("mqtt: test connection failed")
+	}
+	e.Fields = nil
+	if !p.publish(ctx, c, p.s.TopicPrefix+"/event", false, e) {
+		return errors.New("mqtt: test delivery failed")
+	}
+	return nil
 }

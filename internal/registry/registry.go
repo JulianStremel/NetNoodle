@@ -56,7 +56,7 @@ func (r *Registry[T]) RegisterWithSchema(typ string, f Factory[T], schema Schema
 		}
 		seen[field.Key] = true
 		switch field.Type {
-		case "url", "string", "fingerprint", "bool", "duration", "list":
+		case "url", "string", "fingerprint", "bool", "duration", "list", "int":
 		case "secret":
 			if field.Default != nil {
 				panic("secret defaults are forbidden")

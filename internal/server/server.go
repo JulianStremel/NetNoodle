@@ -32,6 +32,7 @@ type Server struct {
 	ui          fs.FS
 	fingerprint string
 	limiter     *loginLimiter
+	notifiersMu sync.RWMutex
 	notifiers   []notify.Notifier
 	mqtt        *mqtt.Publisher
 	notifySem   chan struct{}

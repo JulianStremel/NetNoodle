@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/JulianStremel/netnoodle/internal/mqtt"
 	"github.com/JulianStremel/netnoodle/internal/notify"
 	"github.com/JulianStremel/netnoodle/internal/registry"
 	"github.com/JulianStremel/netnoodle/internal/store"
@@ -53,7 +54,11 @@ func (s *Server) emit(ctx context.Context, e notify.Event, actor, data string) {
 	if err := s.st.AddEvent(ctx, store.Event{At: e.At, Type: e.Type, Actor: actor, Summary: e.Title, Data: data}); err != nil {
 		s.log.Error("event", "err", err)
 	}
-	for _, n := range s.notifiers {
+	for _, n := range s.notifierSnapshot() {
+		if _, ok := n.(*mqtt.Publisher); ok {
+			_ = n.Notify(ctx, e)
+			continue
+		}
 		// At most cap(notifySem) sends run at a time; a burst drops the rest
 		// (they stay in the event log).
 		select {
@@ -67,17 +72,26 @@ func (s *Server) emit(ctx context.Context, e notify.Event, actor, data string) {
 			nctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
 			if err := n.Notify(nctx, e); err != nil {
-				s.log.Warn("notify", "notifier", n.Name(), "err", err)
+				s.log.Warn("notify", "notifier", n.Name(), "error", "delivery failed")
 			}
 		}(n)
 	}
 }
 
-// SetNotifiers installs the notifiers built from the config.
-func (s *Server) SetNotifiers(ns []notify.Notifier) { s.notifiers = ns }
+// SetNotifiers safely replaces the notifier snapshot, including during sends.
+func (s *Server) SetNotifiers(ns []notify.Notifier) {
+	s.notifiersMu.Lock()
+	defer s.notifiersMu.Unlock()
+	s.notifiers = append([]notify.Notifier(nil), ns...)
+}
+func (s *Server) notifierSnapshot() []notify.Notifier {
+	s.notifiersMu.RLock()
+	defer s.notifiersMu.RUnlock()
+	return append([]notify.Notifier(nil), s.notifiers...)
+}
 
-// RunSources starts the supervisor for config and database sources. Individual
-// constructor or poll failures are recorded without stopping other sources.
+// RunSources starts the shared supervisor for all config and database
+// integrations. Sources get poll workers; other plug-ins are swapped on change.
 func (s *Server) RunSources(ctx context.Context, specs []SourceSpec) error {
 	return s.startIntegrationSupervisor(ctx, specs)
 }

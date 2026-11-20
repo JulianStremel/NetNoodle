@@ -2,6 +2,9 @@ import { api, el, ago, registerView } from "./app.js";
 
 registerView("integrations", "Integrations", async (root) => {
   const types = await api("/api/integrations/types");
+  let kind = "source";
+  const labels = { source: "Sources", notify: "Notifications", intel: "Threat intelligence", llm: "AI advisor" };
+  const tabs = el("div", { role: "tablist", "aria-label": "Integration kinds" });
   const list = el("div", { class: "integration-list" });
   const editor = el("div");
   const error = el("p", { class: "error", role: "alert" });
@@ -49,7 +52,9 @@ registerView("integrations", "Integrations", async (root) => {
       const secretSet = row?.secrets?.[field.key]?.set;
       const attrs = { required: field.required && !secretSet, "aria-label": field.label };
       const input = field.type === "list" ? el("textarea", attrs) : el("input", {
-        ...attrs, type: field.type === "bool" ? "checkbox" : field.type === "secret" ? "password" : field.type === "url" ? "url" : "text",
+        ...attrs, type: field.type === "bool" ? "checkbox" : field.type === "secret" ? "password" : field.type === "url" ? "url" : field.type === "int" ? "number" : "text",
+        min: field.type === "int" ? 1 : undefined,
+        step: field.type === "int" ? 1 : undefined,
         autocomplete: field.type === "secret" ? "new-password" : undefined,
         placeholder: secretSet ? "Already set; leave empty to keep" : undefined,
       });
@@ -71,10 +76,11 @@ registerView("integrations", "Integrations", async (root) => {
       for (const [key, { field, input }] of controls) {
         if (field.type === "secret") secrets[key] = input.value;
         else if (field.type === "bool") settings[key] = input.checked;
+        else if (field.type === "int") settings[key] = Number(input.value);
         else if (field.type === "list") settings[key] = input.value.split("\n").map(v => v.trim()).filter(Boolean);
         else settings[key] = input.value;
       }
-      return { type: schema.type, name: name.value, settings, secrets, ...(row ? { id: row.id } : {}) };
+      return { kind: schema.kind, type: schema.type, name: name.value, settings, secrets, ...(row ? { id: row.id } : {}) };
     };
     const test = button("Test connection", async () => {
       if (busy || !fieldsValid()) return;
@@ -87,7 +93,10 @@ registerView("integrations", "Integrations", async (root) => {
         if (JSON.stringify(request) !== JSON.stringify(payload())) { invalidate(); return; }
         if (result.ok) {
           tested = JSON.stringify(request); save.disabled = false;
-          status.textContent = `Connection OK: ${result.entities} entities. No data was imported.`;
+          status.textContent = schema.kind === "notify" ? "Test event sent to this notifier."
+            : schema.kind === "intel" ? "Fetch OK. No results were saved."
+            : schema.kind === "llm" ? `Reply length: ${result.reply_length} bytes. Latency: ${result.latency_ms} ms.`
+            : `Connection OK: ${result.entities} entities. No data was imported.`;
         } else { invalidate(); message.textContent = result.error || "Connection test failed."; }
       } catch (e) { invalidate(); message.textContent = e.message; }
       finally { busy = false; test.disabled = false; }
@@ -120,6 +129,7 @@ registerView("integrations", "Integrations", async (root) => {
     }, true) : null;
     const form = el("form", { class: "card integration-editor" },
       el("h2", {}, `${row ? "Edit" : "Add"} integration: ${schema.type}`),
+      schema.kind === "llm" ? el("p", {}, "Saved for the future M7 advisor. This provider does not make decisions or start actions. The test sends only Reply with OK.") : null,
       el("p", { class: "muted" }, "Settings → confirm certificate if needed → test connection → save"), fields,
       fetchPin, certificate, test, status,
       el("label", {}, "Administrator password (to save)", password), save, " ", button("Cancel", close, true), message);
@@ -140,22 +150,24 @@ registerView("integrations", "Integrations", async (root) => {
   }
 
   function add() {
-    const select = el("select", { required: true }, types.map(t => el("option", { value: t.type }, t.type)));
+    const available = types.filter(t => t.kind === kind);
+    const select = el("select", { required: true }, available.map(t => el("option", { value: t.type }, t.type)));
     const form = el("form", { class: "card narrow" }, el("h2", {}, "Add integration: choose type"),
-      el("label", {}, "Integration type", select), el("button", { type: "submit", disabled: !types.length }, "Next"), " ", button("Cancel", close, true));
-    form.addEventListener("submit", ev => { ev.preventDefault(); settingsForm(types.find(t => t.type === select.value)); });
+      el("label", {}, "Integration type", select), el("button", { type: "submit", disabled: !available.length }, "Next"), " ", button("Cancel", close, true));
+    form.addEventListener("submit", ev => { ev.preventDefault(); settingsForm(available.find(t => t.type === select.value)); });
     editor.replaceChildren(form); select.focus();
   }
 
   async function refresh() {
     const rows = await api("/api/integrations");
-    list.replaceChildren(...rows.map(row => {
+    const visible = rows.filter(row => row.kind === kind);
+    list.replaceChildren(...visible.map(row => {
       const card = el("article", { class: "card" }, el("h2", {}, row.name),
         el("p", { class: "muted" }, `${row.type}${row.from_config ? " · from config file (read only)" : ""}`),
         el("p", {}, `${row.running ? "Running" : row.enabled ? "Stopped" : "Disabled"} · Last poll: ${ago(row.last_poll)} · Last success: ${ago(row.last_ok_at)}`),
         row.last_error ? el("p", { class: "error" }, row.last_error) : null);
       if (!row.from_config) {
-        const schema = types.find(t => t.type === row.type);
+        const schema = types.find(t => t.kind === row.kind && t.type === row.type);
         card.append(el("div", { class: "integration-actions" },
           schema ? button("Edit", () => settingsForm(schema, row), true) : null,
           button(row.enabled ? "Disable" : "Enable", () => change(row, row.enabled ? "disable" : "enable"), true),
@@ -163,10 +175,21 @@ registerView("integrations", "Integrations", async (root) => {
       }
       return card;
     }));
-    if (!rows.length) list.append(el("p", { class: "muted" }, "No integrations yet. Add one to import devices from a service."));
+    if (!visible.length) list.append(el("p", { class: "muted" }, "No integrations in this tab yet. Select Add integration to set one up."));
     error.textContent = "";
   }
-  root.append(el("h1", {}, "Integrations"), button("Add integration", add), error, editor, list);
+  for (const [value, label] of Object.entries(labels)) {
+    if (!types.some(t => t.kind === value)) continue;
+    const tab = button(label, async () => {
+      kind = value; close();
+      for (const entry of tabs.children) entry.setAttribute("aria-selected", String(entry === tab));
+      try { await refresh(); } catch (e) { error.textContent = e.message; }
+    }, true);
+    tab.setAttribute("role", "tab");
+    tab.setAttribute("aria-selected", String(value === kind));
+    tabs.append(tab);
+  }
+  root.append(el("h1", {}, "Integrations"), tabs, button("Add integration", add), error, editor, list);
   await refresh();
   const timer = setInterval(async () => {
     if (!root.isConnected) { clearInterval(timer); return; }

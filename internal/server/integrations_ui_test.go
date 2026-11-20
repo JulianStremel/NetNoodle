@@ -23,6 +23,7 @@ assert.ok(!source.includes('innerHTML'));
 function el(tag, attrs = {}, ...children) {
   const n = { tag, attrs, children: children.flat(Infinity).filter(x => x != null && x !== false),
     value: attrs.value ?? '', checked: false, disabled: Boolean(attrs.disabled), hidden: Boolean(attrs.hidden), listeners: {},
+    setAttribute(k,v) { this.attrs[k]=v; },
     append(...c) { this.children.push(...c.flat(Infinity).filter(x => x != null && x !== false)); },
     replaceChildren(...c) { this.children = c.flat(Infinity).filter(x => x != null && x !== false); },
     addEventListener(event, cb) { this.listeners[event] = cb; }, focus() {}, reportValidity() { return true; },
@@ -45,16 +46,17 @@ const fields = [
   {key:'period',label:'Period',type:'duration',default:'10m'},
   {key:'extra',label:'Extra',type:'string',default:'anything'},
 ];
-const schema = {type:'a-new-plugin-without-ui-code',fields};
-let rows = [{id:1,type:schema.type,name:'saved',enabled:true,settings:{endpoint:'https://saved',active:false},secrets:{credential:{set:true}},running:true},
-  {id:0,type:schema.type,name:'config',enabled:true,settings:{},secrets:{},from_config:true}];
+const schema = {kind:'source',type:'a-new-plugin-without-ui-code',fields};
+const schemas = [schema, ...['notify','intel','llm'].map(kind=>({kind,type:schema.type,fields:[{key:'limit',label:'Limit',type:'int',default:4}]}))];
+let rows = [{id:1,kind:'source',type:schema.type,name:'saved',enabled:true,settings:{endpoint:'https://saved',active:false},secrets:{credential:{set:true}},running:true},
+  {id:0,kind:'source',type:schema.type,name:'config',enabled:true,settings:{},secrets:{},from_config:true}];
 const calls = [];
 async function api(path, options) {
   calls.push({path,options});
-  if (path === '/api/integrations/types') return [schema];
+  if (path === '/api/integrations/types') return schemas;
   if (!options) return rows;
   if (path === '/api/integrations/probe') return {fingerprint:'a'.repeat(64),subject:'<img src=x onerror=alert(1)>'};
-  if (path === '/api/integrations/test') return {ok:true,entities:2,error:''};
+  if (path === '/api/integrations/test') return {ok:true,entities:2,reply_length:2,latency_ms:3,error:''};
   return {ok:true,id:2};
 }
 let page;
@@ -62,7 +64,7 @@ new Function('api','el','ago','registerView','setInterval','clearInterval','wind
   (name,title,view) => {assert.equal(name,'integrations');page=view;}, () => 1, () => {}, {addEventListener(){}});
 (async () => {
   const root = el('main'); await page(root);
-  const editor = root.children[3], list = root.children[4];
+  const editor = root.children[4], list = root.children[5];
   assert.equal(all(list.children[1]).filter(n => n.tag === 'button').length,0,'config is read only');
   assert.match(text(list.children[1]),/from config file/);
   await click(root,'Add integration'); await submit(editor.children[0]);
@@ -104,6 +106,19 @@ new Function('api','el','ago','registerView','setInterval','clearInterval','wind
     const request=calls.filter(c=>c.options && (c.path.endsWith('/disable') || c.options.method==='DELETE')).at(-1);
     assert.equal(request.options.body.password,'admin-password');
   }
+  for (const [kind,label] of [['notify','Notifications'],['intel','Threat intelligence'],['llm','AI advisor']]) {
+    await click(root,label);
+    assert.equal(all(list).filter(n=>n.tag==='article').length,0,'rows filtered by kind');
+    await click(root,'Add integration'); await submit(editor.children[0]);
+    form=editor.children[0];
+    assert.equal(input(form,'Limit').attrs.type,'number');
+    input(form,'Limit').value='6';
+    await click(form,'Test connection');
+    const request=calls.filter(c=>c.path==='/api/integrations/test').at(-1).options.body;
+    assert.equal(request.kind,kind); assert.equal(request.settings.limit,6);
+    if (kind==='llm') assert.ok(all(form).some(n=>String(n.textContent).includes('Reply length: 2 bytes. Latency: 3 ms.')));
+  }
+
 })().catch(err=>{console.error(err);process.exitCode=1;});
 `
 	if out, err := exec.Command(node, "-e", script, path).CombinedOutput(); err != nil {

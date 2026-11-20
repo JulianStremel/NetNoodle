@@ -18,9 +18,10 @@ import (
 
 // intelState holds the threat-intelligence plug-ins and the match queue.
 type intelState struct {
-	mu        sync.Mutex
-	matchers  []intel.Matcher
-	enrichers []intel.Enricher
+	mu         sync.Mutex
+	generation uint64
+	matchers   []intel.Matcher
+	enrichers  []intel.Enricher
 	// queue holds each device at most once (pending). It has no fixed
 	// size, so no device is dropped (security review 2026-11-20: a full
 	// 4096 channel skipped high device IDs on every refresh).
@@ -58,11 +59,13 @@ func newIntelState() *intelState {
 	}
 }
 
-// SetIntel installs the matchers and enrichers built from the config.
+// SetIntel safely replaces matchers and enrichers while matching continues.
 func (s *Server) SetIntel(ms []intel.Matcher, es []intel.Enricher) {
 	s.intel.mu.Lock()
 	defer s.intel.mu.Unlock()
-	s.intel.matchers, s.intel.enrichers = ms, es
+	s.intel.matchers, s.intel.enrichers = append([]intel.Matcher(nil), ms...), append([]intel.Enricher(nil), es...)
+	s.intel.feeds = map[string]*FeedStatus{}
+	s.intel.generation++
 	for _, e := range es {
 		s.intel.feeds[e.Name()] = &FeedStatus{Name: e.Name()}
 	}
@@ -164,7 +167,9 @@ func (s *Server) KickIntel() {
 }
 
 func (s *Server) refreshFeeds(ctx context.Context) {
-	ms, es := s.intelPlugins()
+	s.intel.mu.Lock()
+	ms, es, generation := s.intel.matchers, s.intel.enrichers, s.intel.generation
+	s.intel.mu.Unlock()
 	type feed interface {
 		Name() string
 		intel.Refresher
@@ -184,15 +189,19 @@ func (s *Server) refreshFeeds(ctx context.Context) {
 		cancel()
 		s.intel.mu.Lock()
 		f := s.intel.feeds[e.Name()]
+		if f == nil || generation != s.intel.generation {
+			s.intel.mu.Unlock()
+			continue
+		}
 		if err != nil {
-			f.LastError = err.Error()
+			f.LastError = "Refresh failed; check URL and settings."
 		} else {
 			f.LastOK, f.LastError = s.now(), ""
 		}
 		s.intel.mu.Unlock()
 		if err != nil && ctx.Err() == nil {
-			s.log.Warn("feed refresh", "feed", e.Name(), "err", err)
-			s.event(ctx, "intel.error", e.Name(), "feed refresh failed: "+err.Error())
+			s.log.Warn("feed refresh failed", "feed", e.Name())
+			s.event(ctx, "intel.error", e.Name(), "Feed refresh failed; check URL and settings.")
 		}
 	}
 }
@@ -230,11 +239,7 @@ const maxHitsPerDevice = 50000
 // MatchDevice runs all matchers for one device and stores the findings.
 // A matcher that fails leaves the device's earlier findings unchanged.
 func (s *Server) MatchDevice(ctx context.Context, id int64) error {
-	if s.mqtt != nil {
-		// Enrichment can mark an existing open finding as KEV without opening
-		// a new finding (and therefore without a finding.new notification).
-		defer s.mqtt.Trigger()
-	}
+	defer s.triggerMQTT()
 	ms, es := s.intelPlugins()
 	comps, err := s.st.DeviceComponents(ctx, id)
 	if err != nil {
@@ -248,7 +253,7 @@ func (s *Server) MatchDevice(ctx context.Context, id int64) error {
 		hits, err := m.Match(mctx, comps)
 		cancel()
 		if err != nil {
-			errs = append(errs, m.Name()+": "+err.Error())
+			errs = append(errs, m.Name()+": match failed; check URL and settings")
 			continue
 		}
 		if len(hits) > maxHitsPerDevice {

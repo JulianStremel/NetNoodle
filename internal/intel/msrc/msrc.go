@@ -39,7 +39,12 @@ const (
 // ErrTooManyHits is returned when one match exceeds maxHits.
 var ErrTooManyHits = errors.New("msrc: too many hits for one device")
 
-func init() { intel.Matchers.Register("msrc", New) }
+func init() {
+	intel.Matchers.RegisterWithSchema("msrc", New, registry.Schema{Fields: []registry.Field{
+		{Key: "url", Label: "API base URL", Type: "url", Default: defaultURL},
+		{Key: "months", Label: "Months of updates", Type: "int", Default: 24, Help: "1 to 120."},
+	}})
+}
 
 // Settings configures the API base URL and the number of monthly documents.
 type Settings struct {
@@ -637,3 +642,6 @@ func apiScore(n json.Number, vector string) score {
 	}
 	return score{base: b, vector: bounded(vector), valid: true}
 }
+
+// Test forces one fresh fetch on this disposable matcher, without saving findings.
+func (m *Matcher) Test(ctx context.Context) error { return m.load(ctx, true) }

@@ -16,8 +16,6 @@ import (
 	"time"
 
 	"github.com/JulianStremel/netnoodle/internal/decide"
-	"github.com/JulianStremel/netnoodle/internal/intel"
-	"github.com/JulianStremel/netnoodle/internal/notify"
 	_ "github.com/JulianStremel/netnoodle/internal/plugins" // built-in plug-ins
 	"github.com/JulianStremel/netnoodle/internal/pull"
 	pullhttps "github.com/JulianStremel/netnoodle/internal/pull/https"
@@ -100,25 +98,11 @@ func run() error {
 	}
 	srv.SetOrderKey(orderKey)
 
-	notifiers, err := registry.BuildAll(notify.Registry, cfg.Notifiers)
-	if err != nil {
-		return err
-	}
-	srv.SetNotifiers(notifiers)
 	stopMQTT, err := srv.StartMQTT(ctx)
 	if err != nil {
 		return err
 	}
 	defer stopMQTT()
-	matchers, err := registry.BuildAll(intel.Matchers, cfg.Matchers)
-	if err != nil {
-		return err
-	}
-	enrichers, err := registry.BuildAll(intel.Enrichers, cfg.Enrichers)
-	if err != nil {
-		return err
-	}
-	srv.SetIntel(matchers, enrichers)
 	deciders, err := registry.BuildAll(decide.Deciders, cfg.Deciders)
 	if err != nil {
 		return err

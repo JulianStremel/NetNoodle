@@ -18,11 +18,13 @@ const integrationPollTimeout = 30 * time.Second
 const integrationProbeTimeout = 10 * time.Second
 
 type integrationSupervisor struct {
-	mu        sync.Mutex // serializes persistence changes and reconciliation
-	ctx       context.Context
-	config    []SourceSpec
-	workers   map[string]*integrationWorker
-	testSlots chan struct{}
+	mu             sync.Mutex // serializes persistence changes and reconciliation
+	ctx            context.Context
+	config         []SourceSpec
+	workers        map[string]*integrationWorker
+	testSlots      chan struct{}
+	plugins        map[string]*activeIntegration
+	pluginsStarted bool
 }
 
 type integrationWorker struct {
@@ -37,7 +39,7 @@ type integrationWorker struct {
 }
 
 func newIntegrationSupervisor() *integrationSupervisor {
-	return &integrationSupervisor{workers: map[string]*integrationWorker{}, testSlots: make(chan struct{}, 4)}
+	return &integrationSupervisor{workers: map[string]*integrationWorker{}, plugins: map[string]*activeIntegration{}, testSlots: make(chan struct{}, 4)}
 }
 
 func (s *Server) startIntegrationSupervisor(ctx context.Context, specs []SourceSpec) error {
@@ -59,6 +61,11 @@ func (s *Server) startIntegrationSupervisor(ctx context.Context, specs []SourceS
 			select {
 			case <-ctx.Done():
 				sup.mu.Lock()
+				for key, a := range sup.plugins {
+					stopPlugin(a)
+					delete(sup.plugins, key)
+				}
+				s.SetNotifiers(nil)
 				for key, w := range sup.workers {
 					stopIntegration(w)
 					delete(sup.workers, key)
@@ -147,7 +154,7 @@ func (s *Server) reconcileIntegrationsLocked(ctx context.Context) error {
 		if i.Kind != "source" {
 			continue
 		}
-		revision := fmt.Sprintf("%s/%s/%s/%s/%t/%s", i.Type, i.Name, i.Settings, i.Secrets, i.Enabled, i.UpdatedAt.Format(time.RFC3339Nano))
+		revision := integrationRevision(i)
 		start(integrationKey(i.ID), revision, i, false, 0)
 	}
 	for key, w := range sup.workers {
@@ -156,24 +163,34 @@ func (s *Server) reconcileIntegrationsLocked(ctx context.Context) error {
 			delete(sup.workers, key)
 		}
 	}
-	return nil
+	return s.reconcilePluginsLocked(rows)
+}
+
+func integrationRevision(i store.Integration) string {
+	return fmt.Sprintf("%s/%s/%s/%s/%s/%t/%s", i.Kind, i.Type, i.Name, i.Settings, i.Secrets, i.Enabled, i.UpdatedAt.Format(time.RFC3339Nano))
 }
 
 func (s *Server) reservedName(name string) bool {
 	// Config reservations are immutable. Database names are protected against
 	// enrolled peers atomically by the store's shared namespace constraints.
-	return s.reserved[strings.ToLower(name)]
+	if s.reserved[strings.ToLower(name)] {
+		return true
+	}
+	for _, i := range s.configPlugins() {
+		if strings.EqualFold(i.Name, name) {
+			return true
+		}
+	}
+	return len(s.cfg.MQTT) > 0 && string(s.cfg.MQTT) != "null" && strings.EqualFold(name, "mqtt")
 }
 
 func buildIntegration(i store.Integration) (source.Source, time.Duration, error) {
+	raw, err := integrationSettings(i)
+	if err != nil {
+		return nil, 0, err
+	}
 	var settings map[string]json.RawMessage
-	var secrets map[string]string
-	if json.Unmarshal(i.Settings, &settings) != nil || json.Unmarshal(i.Secrets, &secrets) != nil {
-		return nil, 0, errors.New("invalid settings")
-	}
-	if settings == nil {
-		settings = map[string]json.RawMessage{}
-	}
+	_ = json.Unmarshal(raw, &settings)
 	interval := "10m"
 	if b, ok := settings["interval"]; ok && json.Unmarshal(b, &interval) != nil {
 		return nil, 0, errors.New("invalid interval")
@@ -183,10 +200,7 @@ func buildIntegration(i store.Integration) (source.Source, time.Duration, error)
 	if err != nil || every < 30*time.Second {
 		return nil, 0, errors.New("poll interval must be at least 30s")
 	}
-	for key, value := range secrets {
-		settings[key], _ = json.Marshal(value)
-	}
-	raw, _ := json.Marshal(settings)
+	raw, _ = json.Marshal(settings)
 	src, err := source.Registry.Build(i.Type, i.Name, raw)
 	return src, every, err
 }

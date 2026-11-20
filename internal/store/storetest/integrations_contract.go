@@ -84,4 +84,28 @@ func testIntegrations(t *testing.T, open func(*testing.T) store.Store) {
 	if _, err = st.CreateIntegration(ctx, i); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("peer name collision: %v", err)
 	}
+	for _, kind := range []string{"notify", "intel", "llm"} {
+		row := store.Integration{Kind: kind, Type: "contract-plugin", Name: "contract-" + kind, Settings: json.RawMessage(`{"enabled":false}`), Secrets: json.RawMessage(`{"key":"contract-secret"}`), CreatedAt: now, UpdatedAt: now, Enabled: true}
+		row, err = st.CreateIntegration(ctx, row)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := st.GetIntegration(ctx, row.ID)
+		if err != nil || got.Kind != kind || string(got.Secrets) != string(row.Secrets) {
+			t.Fatal(got, err)
+		}
+		got.Enabled = false
+		got.UpdatedAt = now.Add(time.Second)
+		if err = st.UpdateIntegration(ctx, got); err != nil {
+			t.Fatal(err)
+		}
+		got, err = st.GetIntegration(ctx, row.ID)
+		if err != nil || got.Kind != kind || got.Enabled {
+			t.Fatal(got, err)
+		}
+		if err = st.DeleteIntegration(ctx, row.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 }

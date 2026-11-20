@@ -78,3 +78,14 @@ func (s *Server) mqttSnapshot(ctx context.Context) (mqtt.Snapshot, error) {
 	}
 	return out, nil
 }
+
+func (s *Server) triggerMQTT() {
+	if s.mqtt != nil {
+		s.mqtt.Trigger()
+	}
+	for _, n := range s.notifierSnapshot() {
+		if p, ok := n.(*mqtt.Publisher); ok {
+			p.Trigger()
+		}
+	}
+}

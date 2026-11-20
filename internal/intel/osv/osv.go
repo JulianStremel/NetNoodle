@@ -27,7 +27,13 @@ import (
 	"github.com/JulianStremel/netnoodle/internal/tlspin"
 )
 
-func init() { intel.Matchers.Register("osv", New) }
+func init() {
+	intel.Matchers.RegisterWithSchema("osv", New, registry.Schema{Fields: []registry.Field{
+		{Key: "url", Label: "API base URL", Type: "url", Default: "https://api.osv.dev"},
+		{Key: "cache_ttl", Label: "Cache lifetime", Type: "duration", Default: "24h"},
+		{Key: "concurrency", Label: "Parallel requests", Type: "int", Default: 8, Help: "1 to 32."},
+	}})
+}
 
 type settings struct {
 	URL         string `json:"url"`         // default https://api.osv.dev
@@ -712,4 +718,23 @@ func (m *Matcher) toVuln(r *record) intel.Vuln {
 		}
 	}
 	return v
+}
+
+// Test fetches once using an empty batch. No inventory is sent or saved.
+func (m *Matcher) Test(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, m.base+"/v1/querybatch", strings.NewReader(`{"queries":[]}`))
+	if err != nil {
+		return errors.New("osv test request failed")
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := m.hc.Do(req)
+	if err != nil {
+		return errors.New("osv test fetch failed")
+	}
+	defer res.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(res.Body, (1<<20)+1))
+	if err != nil || len(body) > 1<<20 || res.StatusCode/100 != 2 || !json.Valid(body) {
+		return errors.New("osv test response failed")
+	}
+	return nil
 }

@@ -1,6 +1,6 @@
 # Integrations in the web interface
 
-Status: implemented (first version). User request: "make the setup a UI option" (UniFi first, generic for all sources).
+Status: implemented for all server-side integration kinds: source, notify (webhook, MQTT), intel (OSV, MSRC, KEV, EPSS), and llm (OpenAI-compatible, Anthropic). Shared schemas, write-only secrets, test actions and hot reload. The M7 advisor is not built; LLM providers remain advisory and isolated from decisions.
 
 ## 1. Goal
 

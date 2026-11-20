@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/JulianStremel/netnoodle/internal/proto"
+	"github.com/JulianStremel/netnoodle/internal/registry"
 	"github.com/JulianStremel/netnoodle/internal/source"
 	"github.com/JulianStremel/netnoodle/internal/store"
 	"github.com/JulianStremel/netnoodle/internal/tlspin"
@@ -45,12 +46,14 @@ func (s *Server) handleIntegrationTypes(w http.ResponseWriter, r *http.Request) 
 	type entry struct {
 		Kind string `json:"kind"`
 		Type string `json:"type"`
-		source.Schema
+		registry.Schema
 	}
 	entries := []entry{}
-	for _, typ := range source.Registry.Types() {
-		if schema, ok := source.Registry.Schema(typ); ok {
-			entries = append(entries, entry{"source", typ, schema})
+	for _, r := range integrationRegistries() {
+		for _, typ := range r.types() {
+			if schema, ok := r.schema(typ); ok {
+				entries = append(entries, entry{r.kind, typ, schema})
+			}
 		}
 	}
 	writeJSON(w, 200, entries)
@@ -76,12 +79,15 @@ type secretFlag struct {
 }
 
 func publicIntegration(i store.Integration, config bool) integrationView {
-	v := integrationView{ID: i.ID, Kind: "source", Type: i.Type, Name: i.Name, Enabled: i.Enabled, FromConfig: config, LastOKAt: i.LastOKAt, Settings: map[string]json.RawMessage{}, Secrets: map[string]secretFlag{}}
+	if i.Kind == "" {
+		i.Kind = "source"
+	}
+	v := integrationView{ID: i.ID, Kind: i.Kind, Type: i.Type, Name: i.Name, Enabled: i.Enabled, FromConfig: config, LastOKAt: i.LastOKAt, Settings: map[string]json.RawMessage{}, Secrets: map[string]secretFlag{}}
 	var settings map[string]json.RawMessage
 	var secrets map[string]string
 	_ = json.Unmarshal(i.Settings, &settings)
 	_ = json.Unmarshal(i.Secrets, &secrets)
-	schema, _ := source.Registry.Schema(i.Type)
+	schema, _ := integrationSchema(i.Kind, i.Type)
 	for _, f := range schema.Fields {
 		if f.Type == "secret" {
 			set := secrets[f.Key] != ""
@@ -90,6 +96,9 @@ func publicIntegration(i store.Integration, config bool) integrationView {
 				_ = json.Unmarshal(settings[f.Key], &direct)
 				_ = json.Unmarshal(settings[f.Key+"_file"], &file)
 				set = direct != "" || file != ""
+				if f.Key == "headers_json" && len(settings["headers"]) > 2 {
+					set = true
+				}
 			}
 			v.Secrets[f.Key] = secretFlag{set}
 		} else if b, ok := settings[f.Key]; ok {
@@ -122,12 +131,13 @@ func (s *Server) handleIntegrations(w http.ResponseWriter, r *http.Request) {
 			}
 			worker.mu.Unlock()
 		}
+		if a := sup.plugins[key]; a != nil {
+			v.Running = a.plugin != nil && a.row.Enabled
+			v.LastError = a.errText
+		}
 		out = append(out, v)
 	}
 	for _, i := range rows {
-		if i.Kind != "source" {
-			continue
-		}
 		add(i, integrationKey(i.ID), false)
 	}
 	specs := s.cfg.Sources
@@ -152,6 +162,12 @@ func (s *Server) handleIntegrations(w http.ResponseWriter, r *http.Request) {
 		raw, _ := json.Marshal(settings)
 		add(store.Integration{Type: spec.Type, Name: name, Settings: raw, Enabled: !spec.Disabled}, configIntegrationKey(index), true)
 	}
+	for index, i := range s.configPlugins() {
+		add(i, configPluginKey(index), true)
+	}
+	if len(s.cfg.MQTT) > 0 && strings.TrimSpace(string(s.cfg.MQTT)) != "null" {
+		add(store.Integration{Kind: "notify", Type: "mqtt", Name: "mqtt", Settings: s.cfg.MQTT, Enabled: true}, "legacy-mqtt", true)
+	}
 	writeJSON(w, 200, out)
 }
 
@@ -167,19 +183,21 @@ type integrationRequest struct {
 }
 
 // prepareIntegration admits only schema keys and moves secrets into a separate
-// object. File paths and insecure TLS options remain config-file-only settings.
+// object. File paths and source TLS bypasses remain config-file-only settings.
 func prepareIntegration(req integrationRequest, old *store.Integration) (store.Integration, error) {
-	i := store.Integration{Kind: "source", Type: req.Type, Name: req.Name, Enabled: true}
-	if req.Kind != "" && req.Kind != "source" {
-		return i, errors.New("unsupported integration kind")
+	kind := req.Kind
+	if kind == "" {
+		if old != nil {
+			kind = old.Kind
+		} else {
+			kind = "source"
+		}
 	}
+	i := store.Integration{Kind: kind, Type: req.Type, Name: req.Name, Enabled: true}
 	if old != nil {
 		i = *old
-		if old.Kind != "source" {
-			return i, errors.New("unsupported integration kind")
-		}
-		if req.Type != old.Type {
-			return i, errors.New("integration type cannot change")
+		if kind != old.Kind || req.Type != old.Type {
+			return i, errors.New("integration kind and type cannot change")
 		}
 		i.Name = req.Name
 	}
@@ -189,11 +207,11 @@ func prepareIntegration(req integrationRequest, old *store.Integration) (store.I
 	if req.Enabled != nil {
 		i.Enabled = *req.Enabled
 	}
-	schema, ok := source.Registry.Schema(i.Type)
+	schema, ok := integrationSchema(i.Kind, i.Type)
 	if !ok {
 		return i, errors.New("unknown integration type")
 	}
-	fields := map[string]source.Field{}
+	fields := map[string]registry.Field{}
 	for _, f := range schema.Fields {
 		fields[f.Key] = f
 	}
@@ -240,6 +258,9 @@ func prepareIntegration(req integrationRequest, old *store.Integration) (store.I
 		}
 		valid := true
 		switch f.Type {
+		case "int":
+			var value int
+			valid = string(b) != "null" && json.Unmarshal(b, &value) == nil && value > 0
 		case "bool":
 			var value bool
 			valid = string(b) != "null" && json.Unmarshal(b, &value) == nil
@@ -258,7 +279,7 @@ func prepareIntegration(req integrationRequest, old *store.Integration) (store.I
 			if valid && f.Type == "duration" {
 				d, err := time.ParseDuration(value)
 				valid = err == nil && d > 0
-				if f.Key == "interval" && d < 30*time.Second {
+				if i.Kind == "source" && f.Key == "interval" && d < 30*time.Second {
 					valid = false
 				}
 			}
@@ -285,7 +306,7 @@ func integrationAPIError(w http.ResponseWriter, err error) {
 	case errors.Is(err, store.ErrNotFound):
 		writeErr(w, 404, "integration not found")
 	case errors.Is(err, store.ErrConflict):
-		writeErr(w, 409, "a source or peer with this name already exists")
+		writeErr(w, 409, "an integration or peer with this name already exists")
 	default:
 		writeErr(w, 500, "cannot save integration")
 	}
@@ -326,7 +347,7 @@ func (s *Server) handleSaveIntegration(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 409, "this name is reserved by the server or config file")
 		return
 	}
-	if _, _, err = buildIntegration(i); err != nil {
+	if _, err = buildPlugin(i); err != nil {
 		writeErr(w, 400, "Invalid settings; check required fields, URL and TLS settings.")
 		return
 	}
@@ -342,7 +363,7 @@ func (s *Server) handleSaveIntegration(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err = s.reconcileIntegrationsLocked(r.Context()); err != nil {
-		writeErr(w, 503, "saved; source refresh will retry shortly")
+		writeErr(w, 503, "saved; integration refresh will retry shortly")
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true, "id": i.ID})
@@ -372,7 +393,7 @@ func (s *Server) handleChangeIntegration(w http.ResponseWriter, r *http.Request)
 		integrationAPIError(w, err)
 		return
 	}
-	if i.Kind != "source" {
+	if !supportedIntegrationKind(i.Kind) {
 		writeErr(w, 404, "integration not found")
 		return
 	}
@@ -381,7 +402,7 @@ func (s *Server) handleChangeIntegration(w http.ResponseWriter, r *http.Request)
 	} else {
 		i.Enabled = strings.HasSuffix(r.URL.Path, "/enable")
 		if i.Enabled {
-			if _, _, err := buildIntegration(i); err != nil {
+			if _, err := buildPlugin(i); err != nil {
 				writeErr(w, 400, "Invalid settings; check required fields, URL and TLS settings.")
 				return
 			}
@@ -394,7 +415,7 @@ func (s *Server) handleChangeIntegration(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if err = s.reconcileIntegrationsLocked(r.Context()); err != nil {
-		writeErr(w, 503, "saved; source refresh will retry shortly")
+		writeErr(w, 503, "saved; integration refresh will retry shortly")
 		return
 	}
 	writeJSON(w, 200, map[string]bool{"ok": true})
@@ -479,7 +500,7 @@ func (s *Server) handleIntegrationTest(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err.Error())
 		return
 	}
-	src, _, err := buildIntegration(i)
+	plugin, err := buildPlugin(i)
 	if err != nil {
 		writeErr(w, 400, "Invalid settings; check required fields, URL and TLS settings.")
 		return
@@ -493,27 +514,47 @@ func (s *Server) handleIntegrationTest(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), integrationPollTimeout)
 	defer cancel()
 	var entities atomic.Int64
-	done := make(chan error, 1)
+	type testResult struct {
+		fields map[string]any
+		err    error
+	}
+	done := make(chan testResult, 1)
 	go func() {
-		defer func() { <-s.integrations.testSlots }()
-		done <- pollIntegration(ctx, src, func(obs proto.Observation) error {
-			if err := ctx.Err(); err != nil {
-				return err
+		result := testResult{}
+		defer func() {
+			if recover() != nil {
+				result.err = errors.New("integration test failed")
 			}
-			var count func([]proto.Entity) int64
-			count = func(es []proto.Entity) int64 {
-				n := int64(len(es))
-				for _, e := range es {
-					n += count(e.Children)
+			<-s.integrations.testSlots
+			done <- result
+		}()
+		if src, ok := plugin.(source.Source); ok {
+			result.err = pollIntegration(ctx, src, func(obs proto.Observation) error {
+				if err := ctx.Err(); err != nil {
+					return err
 				}
-				return n
-			}
-			entities.Add(count(obs.Entities))
-			return nil
-		})
+				var count func([]proto.Entity) int64
+				count = func(es []proto.Entity) int64 {
+					n := int64(len(es))
+					for _, e := range es {
+						n += count(e.Children)
+					}
+					return n
+				}
+				entities.Add(count(obs.Entities))
+				return nil
+			})
+		} else {
+			result.fields, result.err = testPlugin(ctx, plugin)
+		}
 	}()
+	fields := map[string]any{}
 	select {
-	case err = <-done:
+	case result := <-done:
+		err = result.err
+		if result.fields != nil {
+			fields = result.fields
+		}
 	case <-ctx.Done():
 		err = ctx.Err()
 	}
@@ -522,7 +563,8 @@ func (s *Server) handleIntegrationTest(w http.ResponseWriter, r *http.Request) {
 		err = ctx.Err()
 		errText = "Connection test timed out or was canceled."
 	} else if err != nil {
-		errText = "Poll failed; check credentials, URL and TLS settings."
+		errText = "Connection test failed; check credentials, URL and settings."
 	}
-	writeJSON(w, 200, map[string]any{"ok": err == nil, "entities": entities.Load(), "error": errText})
+	fields["ok"], fields["entities"], fields["error"] = err == nil, entities.Load(), errText
+	writeJSON(w, 200, fields)
 }

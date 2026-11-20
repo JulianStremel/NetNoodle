@@ -162,7 +162,7 @@ func (b *broker) serve(c net.Conn) {
 			level, _ := in.ReadByte()
 			flags, _ := in.ReadByte()
 			in.Seek(2, io.SeekCurrent)
-			if level != 4 || utf(in) != "netnoodle" {
+			if level != 4 || !strings.HasPrefix(utf(in), "netnoodle") {
 				b.t.Error("bad MQTT client identity")
 				return
 			}
@@ -399,7 +399,7 @@ func TestSettingsAndBoundedQueue(t *testing.T) {
 		{`{"broker":"mqtts://host","interval":"bad-secret"}`, false},
 		{`{"broker":"mqtts://host","interval":"0s"}`, false},
 		{`{"broker":"mqtts://host","password_file":"missing"}`, false},
-		{`{"broker":"mqtts://host","password":"secret"}`, false},
+		{`{"broker":"mqtts://host","password":"secret"}`, true},
 		{`{} {}`, false},
 	} {
 		_, err := New(json.RawMessage(tc.raw), provider)
@@ -497,5 +497,35 @@ func TestEventAllowlistAndDetails(t *testing.T) {
 	}
 	if _, err := New(json.RawMessage(`{"broker":"mqtts://broker.lan","fingerprint":"zz"}`), provider); err == nil {
 		t.Fatal("bad fingerprint accepted")
+	}
+}
+
+func TestIntegrationTestDelivery(t *testing.T) {
+	b := startBroker(t, "127.0.0.1:0")
+	raw, _ := json.Marshal(map[string]any{"broker": "mqtt://" + b.ln.Addr().String()})
+	n, err := notify.Registry.Build("mqtt", "mqtt-ui", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := n.(*Publisher)
+	if p.Name() != "mqtt-ui" {
+		t.Fatal(p.Name())
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	if err := p.Test(ctx, notify.Event{Type: "integration.test", Title: "Integration test", At: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.messages) != 1 || b.messages[0].topic != "netnoodle/event" || b.messages[0].retained {
+		t.Fatalf("unexpected test publications: %+v", b.messages)
+	}
+	var e notify.Event
+	if json.Unmarshal(b.messages[0].payload, &e) != nil || e.Type != "integration.test" {
+		t.Fatalf("test event: %s", b.messages[0].payload)
+	}
+	if len(b.wills) != 1 || b.wills[0].topic != "" {
+		t.Fatal("test set a last will")
 	}
 }
