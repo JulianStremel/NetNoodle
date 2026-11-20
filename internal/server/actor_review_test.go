@@ -189,7 +189,10 @@ func TestScopePatternsFailClosed(t *testing.T) {
 		{"agent=*", "mac", "host-a", false},
 		{"agent=[", "agent", "[", false},
 		{"missing-separator", "agent", "x", false},
-		{"proxmox.guest=pve/*", "proxmox.guest", "pve/cluster/100", false},
+		// "/*" with a literal prefix is a subtree, as on the actor side
+		// (proto.MatchesScope; security review 2026-11-20).
+		{"proxmox.guest=pve/*", "proxmox.guest", "pve/cluster/100", true},
+		{"proxmox.guest=p*/*", "proxmox.guest", "pve/cluster/100", false},
 		{"proxmox.guest=pve/*/*", "proxmox.guest", "pve/cluster/100", true},
 	} {
 		if got := matchesTargetScope([]string{tc.pattern}, proto.Identifier{Kind: tc.kind, Value: tc.value}); got != tc.want {

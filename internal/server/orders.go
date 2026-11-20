@@ -18,7 +18,20 @@ import (
 	"github.com/JulianStremel/netnoodle/internal/version"
 )
 
+// actorLimited answers 429 when an actor peer calls too often.
+func (s *Server) actorLimited(w http.ResponseWriter, r *http.Request) bool {
+	p, _ := peerFrom(r.Context())
+	if !s.actorRate.allow(strconv.FormatInt(p.ID, 10), s.now()) {
+		writeErr(w, http.StatusTooManyRequests, "too many actor requests")
+		return true
+	}
+	return false
+}
+
 func (s *Server) handleActorHello(w http.ResponseWriter, r *http.Request) {
+	if s.actorLimited(w, r) {
+		return
+	}
 	var h struct {
 		proto.ActorHello
 		ActorVersion string `json:"actor_version"`
@@ -123,6 +136,9 @@ func (s *Server) handleActorOrders(w http.ResponseWriter, r *http.Request) {
 	}
 }
 func (s *Server) handleOrderResult(w http.ResponseWriter, r *http.Request) {
+	if s.actorLimited(w, r) {
+		return
+	}
 	var result proto.OrderResult
 	if e := readJSON(r, &result); e != nil || result.Version != proto.Version || (result.Status != proto.OrderDone && result.Status != proto.OrderFailed && result.Status != proto.OrderRejected && result.Status != proto.OrderUncertain) || len(result.Message) > 4096 {
 		writeErr(w, 400, "invalid order result")

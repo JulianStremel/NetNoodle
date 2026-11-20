@@ -56,7 +56,23 @@ var ruleExpressions = []string{
 	`[{"match":{"op":"==","left":{"payload":{"protocol":"tcp","field":"dport"}},"right":"@blocked_tcp"}},{"drop":null}]`,
 	`[{"match":{"op":"==","left":{"payload":{"protocol":"udp","field":"dport"}},"right":"@blocked_udp"}},{"drop":null}]`,
 	`[{"match":{"op":"in","left":{"ct":{"key":"state"}},"right":{"set":["established","related"]}}},{"accept":null}]`,
+	// prerouting drops only packets addressed to this host (also published
+	// container ports, before DNAT), not forwarded or container egress
+	// traffic (security review 2026-11-20).
+	`[{"match":{"op":"==","left":{"fib":{"result":"type","flags":["daddr"]}},"right":"local"}},{"match":{"op":"==","left":{"payload":{"protocol":"tcp","field":"dport"}},"right":"@blocked_tcp"}},{"drop":null}]`,
+	`[{"match":{"op":"==","left":{"fib":{"result":"type","flags":["daddr"]}},"right":"local"}},{"match":{"op":"==","left":{"payload":{"protocol":"udp","field":"dport"}},"right":"@blocked_udp"}},{"drop":null}]`,
 }
+
+// dropKinds are the ruleExpressions indexes of the tcp and udp drops of a chain.
+func dropKinds(chain string) [2]int {
+	if chain == "prerouting" {
+		return [2]int{4, 5}
+	}
+	return [2]int{1, 2}
+}
+
+// isDrop reports whether kind is any port drop rule.
+func isDrop(kind int) bool { return kind == 1 || kind == 2 || kind == 4 || kind == 5 }
 
 // Match full rule semantics rather than comments or string fragments. Counters
 // do not change a rule's match or verdict; additional conditions do.
@@ -66,14 +82,14 @@ func ruleKind(expr []map[string]any) int {
 		if _, counter := statement["counter"]; counter && len(statement) == 1 {
 			continue
 		}
-		statements = append(statements, statement)
-	}
-	if len(statements) != 2 {
-		return -1
+		statements = append(statements, normalizeFib(statement))
 	}
 	for i, raw := range ruleExpressions {
 		var expected []map[string]any
 		_ = json.Unmarshal([]byte(raw), &expected)
+		if len(statements) != len(expected) {
+			continue
+		}
 		if reflect.DeepEqual(statements, expected) {
 			return i
 		}
@@ -90,13 +106,33 @@ func ruleKind(expr []map[string]any) int {
 		}
 		// nft versions may render named set membership as "in".
 		if i > 0 {
-			expected[0]["match"].(map[string]any)["op"] = "in"
+			expected[len(expected)-2]["match"].(map[string]any)["op"] = "in"
 			if reflect.DeepEqual(statements, expected) {
 				return i
 			}
 		}
 	}
 	return -1
+}
+
+// normalizeFib renders fib flags as a list; nft prints one flag as a string.
+func normalizeFib(statement map[string]any) map[string]any {
+	m, ok := statement["match"].(map[string]any)
+	if !ok {
+		return statement
+	}
+	left, ok := m["left"].(map[string]any)
+	if !ok {
+		return statement
+	}
+	fib, ok := left["fib"].(map[string]any)
+	if !ok {
+		return statement
+	}
+	if flag, ok := fib["flags"].(string); ok {
+		fib["flags"] = []any{flag}
+	}
+	return statement
 }
 
 func (b *Backend) ensureRules(ctx context.Context) error {
@@ -112,7 +148,8 @@ func (b *Backend) ensureChainRules(ctx context.Context, chain string) error {
 	if err != nil {
 		return err
 	}
-	var found [4]bool
+	var found [6]bool
+	drops := dropKinds(chain)
 	chainFound, dropSeen := false, false
 	var script strings.Builder
 	for _, entry := range doc.Nftables {
@@ -129,7 +166,10 @@ func (b *Backend) ensureChainRules(ctx context.Context, chain string) error {
 		}
 		// Remove duplicate rules, and move a late loopback exemption ahead
 		// of the drops. Never flush a chain or touch another table.
-		if found[kind] || ((kind == 0 || kind == 3) && dropSeen) {
+		// A drop rule of the other chain's form is obsolete here (the
+		// unqualified prerouting drop of older versions).
+		obsolete := isDrop(kind) && kind != drops[0] && kind != drops[1]
+		if obsolete || found[kind] || ((kind == 0 || kind == 3) && dropSeen) {
 			if r.Handle == 0 {
 				return errors.New("host: nft rule to repair has no handle")
 			}
@@ -137,7 +177,7 @@ func (b *Backend) ensureChainRules(ctx context.Context, chain string) error {
 			continue
 		}
 		found[kind] = true
-		if kind == 1 || kind == 2 {
+		if isDrop(kind) {
 			dropSeen = true
 		}
 	}
@@ -151,9 +191,14 @@ func (b *Backend) ensureChainRules(ctx context.Context, chain string) error {
 		fmt.Fprintf(&script, "insert rule inet %s %s ct state established,related accept\n", b.settings.Table, chain)
 	}
 	for i, protocol := range []string{"tcp", "udp"} {
-		if !found[i+1] {
-			fmt.Fprintf(&script, "add rule inet %s %s %s dport @blocked_%s drop\n", b.settings.Table, chain, protocol, protocol)
+		if found[drops[i]] {
+			continue
 		}
+		local := ""
+		if chain == "prerouting" {
+			local = "fib daddr type local "
+		}
+		fmt.Fprintf(&script, "add rule inet %s %s %s%s dport @blocked_%s drop\n", b.settings.Table, chain, local, protocol, protocol)
 	}
 	if script.Len() > 0 {
 		return b.script(ctx, script.String())

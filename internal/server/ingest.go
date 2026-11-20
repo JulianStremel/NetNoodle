@@ -173,6 +173,7 @@ func (s *Server) acceptObservation(ctx context.Context, p store.Peer, raw []byte
 	}
 	// The source name is the authenticated peer, not what the body says.
 	obs.Source = p.Name
+	inventory.StripReservedAttributes(obs.Entities)
 	agent := ""
 	if p.Role == store.RoleAgent {
 		// An agent reports about its own host only. The server sets the

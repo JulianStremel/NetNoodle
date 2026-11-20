@@ -232,3 +232,18 @@ func TestReachAPIs(t *testing.T) {
 		}
 	}
 }
+
+// TestWideRoutesIgnored: routes wider than /8 (IPv4) or /32 (IPv6) are not
+// subnet routes and do not make devices tunnel-reachable (security review
+// 2026-11-20).
+func TestWideRoutesIgnored(t *testing.T) {
+	router := reachDevice(1, "vps1", "100.64.0.1")
+	router.Attributes = map[string]string{"tailscale.routes": "0.0.0.0/1,128.0.0.0/1,::/1,2000::/3"}
+	routes := routedNetworks([]store.DeviceRow{router})
+	if len(routes) != 0 {
+		t.Fatal(routes)
+	}
+	if got := classifyDevice(reachDevice(2, "web", "10.0.10.20"), routes); got.routed {
+		t.Fatal(got)
+	}
+}

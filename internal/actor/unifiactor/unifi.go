@@ -193,8 +193,16 @@ func (b *Backend) Execute(ctx context.Context, o proto.Order) (message string, e
 		if prior {
 			return "already blocked; left as is", nil
 		}
-	} else if prior, ok := b.journal.Get(o.RevertOf, b.name, mac, "isolate"); ok && prior.Prior {
-		return "block was pre-existing; left blocked", nil
+	} else if o.RevertOf != "" {
+		// A revert acts only on what its order did. Without a journal entry
+		// the order never changed anything (security review 2026-11-20).
+		prior, ok := b.journal.Get(o.RevertOf, b.name, mac, "isolate")
+		if !ok {
+			return actor.NoJournal, nil
+		}
+		if prior.Prior {
+			return "block was pre-existing; left blocked", nil
+		}
 	}
 	payload, _ := json.Marshal(struct {
 		Cmd string `json:"cmd"`

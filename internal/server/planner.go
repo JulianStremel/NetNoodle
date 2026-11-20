@@ -6,9 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
-	"path"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -342,21 +340,8 @@ func (s *Server) releaseOrderPoll(id int64) {
 	}
 }
 
-// Match the value only: kind names are exact. Malformed globs fail closed.
 func matchesTargetScope(patterns []string, id proto.Identifier) bool {
-	if len(patterns) == 0 {
-		return true
-	}
-	for _, pattern := range patterns {
-		kind, glob, ok := strings.Cut(pattern, "=")
-		if !ok || kind != id.Kind {
-			continue
-		}
-		if match, err := path.Match(glob, id.Value); err == nil && match {
-			return true
-		}
-	}
-	return false
+	return proto.MatchesScope(patterns, id)
 }
 
 // Called under orders.run by expiry planning and explicit uncertain results.

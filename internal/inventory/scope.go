@@ -70,6 +70,28 @@ func StripAgentIDs(es []proto.Entity) {
 	}
 }
 
+// reservedAttrPrefixes are attribute namespaces of the in-process sources.
+// The server trusts them (for example tailscale.routes decides which
+// networks are reachable through a tunnel), so peers that report over HTTP
+// (agents, nn-scan, external sources) cannot set them (security review
+// 2026-11-20).
+var reservedAttrPrefixes = []string{"tailscale.", "proxmox.", "ha.", "unifi.", "homeassistant."}
+
+// StripReservedAttributes removes reserved attributes from a peer report.
+func StripReservedAttributes(es []proto.Entity) {
+	for i := range es {
+		for k := range es[i].Attributes {
+			for _, p := range reservedAttrPrefixes {
+				if strings.HasPrefix(k, p) {
+					delete(es[i].Attributes, k)
+					break
+				}
+			}
+		}
+		StripReservedAttributes(es[i].Children)
+	}
+}
+
 // agentKinds are the identifier kinds an agent may report about its host.
 // Other kinds (for example proxmox.guest) belong to other sources; an
 // agent could otherwise pre-claim them and capture a later import.
@@ -219,7 +241,9 @@ func (r *resolver) resolveAgent(e *proto.Entity) (int64, error) {
 			return 0, false, err
 		}
 		for _, h := range have {
-			if h.Kind == AgentKind {
+			// A container of another agent's host is owned too (security
+			// review 2026-11-20).
+			if h.Kind == AgentKind || h.Kind == ChildKind {
 				return 0, false, nil
 			}
 		}

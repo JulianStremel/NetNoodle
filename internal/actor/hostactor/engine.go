@@ -103,8 +103,14 @@ func (b *Backend) execute(ctx context.Context, o proto.Order) (message string, e
 		action, want := "stop", "inactive"
 		if o.Action == "start-service" {
 			action, want = "start", "active"
-			if prior, ok := b.journal.Get(o.RevertOf, b.name, unit, "stop-service"); ok && !prior.Prior {
-				return "service was inactive; left stopped", nil
+			if o.RevertOf != "" {
+				prior, ok := b.journal.Get(o.RevertOf, b.name, unit, "stop-service")
+				if !ok {
+					return actor.NoJournal, nil
+				}
+				if !prior.Prior {
+					return "service was inactive; left stopped", nil
+				}
 			}
 		} else {
 			out, e := b.command(ctx, b.settings.Systemctl, []string{"is-active", unit}, "")

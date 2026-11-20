@@ -78,9 +78,9 @@ func (h *hook) Notify(ctx context.Context, e notify.Event) error {
 	}
 	var body any = e
 	if h.s.Format == "slack" {
-		text := e.Title
+		text := slackEscape(e.Title)
 		if e.Detail != "" {
-			text += "\n" + e.Detail
+			text += "\n" + slackEscape(e.Detail)
 		}
 		body = map[string]string{"text": text}
 	}
@@ -103,4 +103,11 @@ func (h *hook) Notify(ctx context.Context, e notify.Event) error {
 		return fmt.Errorf("webhook returned %s", res.Status)
 	}
 	return nil
+}
+
+// slackEscape escapes the control characters of Slack message text. Device
+// names come from the network (DHCP, PTR, Home Assistant) and must not make
+// links or mentions such as <!channel> (security review 2026-11-20).
+func slackEscape(s string) string {
+	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace(s)
 }

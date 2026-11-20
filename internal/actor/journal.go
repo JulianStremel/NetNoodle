@@ -82,7 +82,9 @@ func (j *Journal) Put(id string, entry JournalEntry) error {
 	next := make(map[string]JournalEntry, len(j.entries)+1)
 	cutoff := time.Now().Add(-48 * time.Hour)
 	for key, e := range j.entries {
-		if !e.Expires.Before(cutoff) {
+		// A zero Expires is a permanent order: keep it until it is reverted,
+		// otherwise a late revert would not know the prior state.
+		if e.Expires.IsZero() || !e.Expires.Before(cutoff) {
 			next[key] = e
 		}
 	}
@@ -105,12 +107,20 @@ func (j *Journal) Put(id string, entry JournalEntry) error {
 	return nil
 }
 
-func OrderExpiry(ttl int64, fallback time.Time) time.Time {
+// OrderExpiry is the journal expiry of an order: zero (permanent) without
+// a TTL (security review 2026-11-20: the entry of a permanent order was
+// pruned two days after the order, and a later revert lost the prior state).
+func OrderExpiry(ttl int64, _ time.Time) time.Time {
 	if ttl > int64((1<<63-1)/time.Second) {
 		ttl = int64((1<<63 - 1) / time.Second)
 	}
 	if ttl > 0 {
 		return time.Now().Add(time.Duration(ttl) * time.Second)
 	}
-	return fallback
+	return time.Time{}
 }
+
+// NoJournal is the result of a revert whose order left no journal entry:
+// the order was never applied (lost in transit, refused or expired), so
+// the revert changes nothing.
+const NoJournal = "no journal entry for the reverted order; left as is"

@@ -70,8 +70,10 @@ Backend `proxmox` (Proxmox VE guests, target `proxmox.guest`): refer to [deploy/
 
 Backend `host` (on the Linux host itself, target `agent=<name of the agent of this host>`): refer to [deploy/nn-actor.host.example.json](../../deploy/nn-actor.host.example.json) and [deploy/nn-actor-host.service](../../deploy/nn-actor-host.service).
 
-- `block-port` adds the ports to sets of its own nftables table `inet netnoodle` and drops incoming packets to them. Each entry has a time limit (the TTL of the order, at most `max_ttl`). Thus the block ends also if the revert order does not arrive. `unblock-port` removes the entries.
+- `block-port` adds the ports to sets of its own nftables table `inet netnoodle` and drops incoming packets to them. In the `prerouting` chain (for published container ports), it drops only packets to an address of this host (`fib daddr type local`). Forwarded traffic and traffic from containers to other hosts are not blocked. The kernel needs the module `nft_fib_inet` (included in the Debian and Proxmox kernels). Each entry has a time limit (the TTL of the order, at most `max_ttl`). Thus the block ends also if the revert order does not arrive. `unblock-port` removes the entries.
 - Ports 22, 7443 and 7444 are never blocked (setting `never_block_ports`), so that you can still log in and the actor can still get the revert order. The backend does not start with an empty `never_block_ports`, unless you set `allow_empty_never_block_ports`. The server also never sends a block for port 22, 7443, 7444 or for its own listen port.
 - `stop-service` and `start-service` are permitted only for the units in `services`. They need root or a polkit rule. The service unit in `deploy/` gives only `CAP_NET_ADMIN`, which is sufficient for `block-port`.
+
+A revert changes only what its order did. If the actor has no journal entry for the order (for example, the order was lost on the network or expired before it arrived), the revert changes nothing and reports "no journal entry for the reverted order; left as is". An order without a TTL keeps its journal entry until it is reverted.
 
 When you approve a decision on the **Actions** page, the server sends an order to an actor that can do the action for the device. The **Actions** page shows the state of the order. After the TTL, the server sends the revert order.

@@ -36,12 +36,15 @@ type Server struct {
 	enrollLim   *loginLimiter
 	bcryptSem   chan struct{}
 	peerRate    *rateLimiter
-	reserved    map[string]bool
-	decide      *decideState
-	intel       *intelState
-	pull        *pullState
-	orders      *orderState
-	now         func() time.Time
+	// actorRate bounds actor hello and result calls; each one starts a
+	// planner run (security review 2026-11-20).
+	actorRate *rateLimiter
+	reserved  map[string]bool
+	decide    *decideState
+	intel     *intelState
+	pull      *pullState
+	orders    *orderState
+	now       func() time.Time
 }
 
 // New creates a server. ui is the static web UI file system.
@@ -57,6 +60,7 @@ func New(cfg Config, st store.Store, ui fs.FS, fingerprint string, log *slog.Log
 		bcryptSem:   make(chan struct{}, 4),
 		notifySem:   make(chan struct{}, 8),
 		peerRate:    newRateLimiter(60, 10*time.Minute),
+		actorRate:   newRateLimiter(300, 10*time.Minute),
 		ingestSlots: make(chan struct{}, maxIngestReads),
 		reserved:    reservedNames(cfg),
 		intel:       newIntelState(),

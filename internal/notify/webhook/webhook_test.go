@@ -42,3 +42,9 @@ func TestWebhook(t *testing.T) {
 		t.Fatal("bad url accepted")
 	}
 }
+
+func TestSlackEscape(t *testing.T) {
+	if got := slackEscape("New device: <https://evil|Approve> <!channel> & co"); got != "New device: &lt;https://evil|Approve&gt; &lt;!channel&gt; &amp; co" {
+		t.Fatal(got)
+	}
+}

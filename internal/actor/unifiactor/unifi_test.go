@@ -549,3 +549,18 @@ func TestLocalAndFileMACProtection(t *testing.T) {
 		t.Fatal("invalid protection MAC accepted")
 	}
 }
+
+// TestRevertWithoutJournal: a revert of an order that left no journal entry
+// (lost in transit, refused, expired) must not unblock a client that was
+// blocked before (security review 2026-11-20).
+func TestRevertWithoutJournal(t *testing.T) {
+	f := newFixture()
+	f.command = "unblock-sta"
+	b := build(t, serverSettings(f.serve(t)))
+	o := order("unisolate", testMAC)
+	o.RevertOf = "never-applied-order"
+	msg, err := b.Execute(context.Background(), o)
+	if err != nil || msg != actor.NoJournal || f.postCalls.Load() != 0 {
+		t.Fatalf("msg=%q err=%v posts=%d", msg, err, f.postCalls.Load())
+	}
+}

@@ -142,6 +142,7 @@ func testAgentMaxHostChildren(t *testing.T, open func(*testing.T) store.Store) {
 
 func testResolverMergeMovesTagsProposalsOrders(t *testing.T, open func(*testing.T) store.Store) {
 	testUntaggedSourceMerge(t, open)
+	testAgentCannotClaimOtherAgentsChild(t, open)
 	st, ctx, now := open(t), context.Background(), time.Now().UTC()
 	keepID := strong("mac", "00:11:22:33:44:55")
 	keep := ingest(t, st, "scan", now, false, proto.Entity{Identifiers: []proto.Identifier{keepID}}).Devices[0]
@@ -248,5 +249,18 @@ func testUntaggedSourceMerge(t *testing.T, open func(*testing.T) store.Store) {
 	r := ingest(t, st, "unifi", now.Add(time.Minute), false, proto.Entity{Identifiers: []proto.Identifier{strong("unifi.client", "c1"), strong("mac", "00:11:22:33:44:01")}})
 	if len(r.Merged) != 1 || len(r.MergeRefused) != 0 || r.Devices[0] != min(a, b) {
 		t.Fatal(r)
+	}
+}
+
+// testAgentCannotClaimOtherAgentsChild: a new agent that reports the MAC of
+// a container of another agent's host does not take over that container
+// (security review 2026-11-20).
+func testAgentCannotClaimOtherAgentsChild(t *testing.T, open func(*testing.T) store.Store) {
+	st, now := open(t), time.Now().UTC()
+	ingestAgent(t, st, "pve1", now, proto.Entity{Kind: proto.KindHost, Children: []proto.Entity{child("lxc/101", "00:11:22:33:44:a1")}})
+	victim := lookup(t, st, "mac", "00:11:22:33:44:a1")
+	r := ingestAgent(t, st, "rogue", now.Add(time.Minute), proto.Entity{Kind: proto.KindHost, Interfaces: []proto.Interface{{Name: "eth0", MAC: "00:11:22:33:44:a1"}}})
+	if len(r.Claimed) != 0 || r.Devices[0] == victim {
+		t.Fatalf("rogue agent claimed another agent's container: %+v", r)
 	}
 }

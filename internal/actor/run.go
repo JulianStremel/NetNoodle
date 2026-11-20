@@ -369,25 +369,8 @@ func coversTarget(inverse, forward string) bool {
 	return !strings.ContainsAny(prefix, "*?[\\") && !strings.ContainsAny(fv, "?[\\") && strings.HasPrefix(fv, prefix) && !strings.Contains(strings.TrimPrefix(fv, prefix), "/")
 }
 
-// Scope globs use path.Match; a trailing /* covers the whole identifier subtree
-// (including source/cluster/vmid). Empty scope preserves v1's unrestricted scope.
-func matchesScope(patterns []string, t proto.Identifier) bool {
-	if len(patterns) == 0 {
-		return true
-	}
-	for _, pattern := range patterns {
-		kind, glob, ok := strings.Cut(pattern, "=")
-		if !ok || kind != t.Kind {
-			continue
-		}
-		if matched, err := path.Match(glob, t.Value); err == nil && matched {
-			return true
-		}
-		if strings.HasSuffix(glob, "/*") && !strings.ContainsAny(strings.TrimSuffix(glob, "/*"), "*?[\\") && strings.HasPrefix(t.Value, strings.TrimSuffix(glob, "*")) {
-			return true
-		}
-	}
-	return false
+func matchesScope(patterns []string, id proto.Identifier) bool {
+	return proto.MatchesScope(patterns, id)
 }
 func truncateMessage(s string) string {
 	s = strings.ToValidUTF8(s, "?")

@@ -364,6 +364,11 @@ func (b *Backend) network(ctx context.Context, base string, o proto.Order) (mess
 		return "", errors.New("proxmox: guest config missing digest")
 	}
 	prior, hasPrior := b.journal.Get(o.RevertOf, b.name, o.Targets[0].Value, "isolate")
+	if o.Action != "isolate" && o.RevertOf != "" && !hasPrior {
+		// The reverted order never changed anything; do not enable links
+		// that were down before (security review 2026-11-20).
+		return actor.NoJournal, nil
+	}
 	keys := []string{}
 	changed := []string{}
 	priorDown := []string{}

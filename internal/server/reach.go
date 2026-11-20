@@ -84,8 +84,9 @@ func routedNetworks(devs []store.DeviceRow) routeIndex {
 		}
 		for _, raw := range strings.Split(d.Attributes["tailscale.routes"], ",") {
 			p, err := netip.ParsePrefix(strings.TrimSpace(raw))
-			// Exit routes do not expose every device.
-			if err != nil || p.Bits() == 0 {
+			// Exit routes do not expose every device, and very wide routes
+			// (for example 0.0.0.0/1) are not subnet routes.
+			if err != nil || (p.Addr().Is4() && p.Bits() < 8) || (!p.Addr().Is4() && p.Bits() < 32) {
 				continue
 			}
 			p = p.Masked()

@@ -81,7 +81,13 @@ func (f *fakeRunner) Run(ctx context.Context, program string, args []string, std
 			f.t.Fatalf("unexpected nft invocation: %+v", c)
 		}
 		if args[2] == "chain" {
-			return []byte(strings.ReplaceAll(f.chain, `"input"`, fmt.Sprintf(`"%s"`, args[5]))), nil, nil
+			listing := strings.ReplaceAll(f.chain, `"input"`, fmt.Sprintf(`"%s"`, args[5]))
+			if args[5] == "prerouting" {
+				// prerouting drops are qualified with fib daddr type local.
+				listing = strings.ReplaceAll(listing, ruleExpressions[1], ruleExpressions[4])
+				listing = strings.ReplaceAll(listing, ruleExpressions[2], ruleExpressions[5])
+			}
+			return []byte(listing), nil, nil
 		}
 		return []byte(f.sets[args[5]]), nil, nil
 	}
@@ -122,7 +128,7 @@ func TestBlockScriptAndArguments(t *testing.T) {
 			t.Fatalf("bad script invocation: %+v", c)
 		}
 	}
-	for _, want := range []string{"hook input priority -10", "hook prerouting priority -150", "input iifname \"lo\" accept", "prerouting iifname \"lo\" accept", "input ct state established,related accept", "prerouting ct state established,related accept", "input tcp dport @blocked_tcp drop", "prerouting udp dport @blocked_udp drop"} {
+	for _, want := range []string{"hook input priority -10", "hook prerouting priority -150", "input iifname \"lo\" accept", "prerouting iifname \"lo\" accept", "input ct state established,related accept", "prerouting ct state established,related accept", "input tcp dport @blocked_tcp drop", "prerouting fib daddr type local udp dport @blocked_udp drop"} {
 		if !strings.Contains(scripts, want) {
 			t.Errorf("missing %q in %s", want, scripts)
 		}
@@ -496,5 +502,49 @@ func TestExampleConfig(t *testing.T) {
 		{Action: "unblock-port", Targets: []string{"agent=web01"}},
 	}) {
 		t.Fatal("incorrect example allow rules or backend count")
+	}
+}
+
+// TestRevertWithoutJournal: start-service as a revert of an order that left
+// no journal entry must not start a unit that was stopped deliberately
+// (security review 2026-11-20).
+func TestRevertWithoutJournal(t *testing.T) {
+	f := newFake(t)
+	b := build(t, `{"agent":"web01","services":["nginx.service"]}`, f)
+	o := order("start-service")
+	o.Params["unit"] = "nginx.service"
+	o.RevertOf = "never-applied-order"
+	msg, err := b.execute(context.Background(), o)
+	if err != nil || msg != actor.NoJournal || len(f.calls) != 0 {
+		t.Fatalf("msg=%q err=%v calls=%+v", msg, err, f.calls)
+	}
+}
+
+// TestPreroutingDropOnlyLocal: prerouting drops only traffic addressed to
+// this host; an unqualified drop of an older version is replaced (security
+// review 2026-11-20: it also dropped forwarded and container traffic).
+func TestPreroutingDropOnlyLocal(t *testing.T) {
+	f := newFake(t)
+	b := build(t, `{"agent":"web01"}`, f)
+	// The listing of prerouting still has the old unqualified drops.
+	// (The "in" form is not rewritten by the fake runner.)
+	f.chain = strings.ReplaceAll(strings.ReplaceAll(chainFixture(0, 1, 2), `"input"`, `"prerouting"`), `"op":"==","left":{"payload"`, `"op":"in","left":{"payload"`)
+	if err := b.ensureChainRules(context.Background(), "prerouting"); err != nil {
+		t.Fatal(err)
+	}
+	script := ""
+	for _, c := range f.calls {
+		script += c.stdin
+	}
+	for _, want := range []string{"delete rule inet netnoodle prerouting handle 12", "delete rule inet netnoodle prerouting handle 13", "add rule inet netnoodle prerouting fib daddr type local tcp dport @blocked_tcp drop", "add rule inet netnoodle prerouting fib daddr type local udp dport @blocked_udp drop"} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("missing %q in %q", want, script)
+		}
+	}
+	// nft prints a single fib flag as a string.
+	var expr []map[string]any
+	_ = json.Unmarshal([]byte(strings.Replace(ruleExpressions[4], `["daddr"]`, `"daddr"`, 1)), &expr)
+	if ruleKind(expr) != 4 {
+		t.Fatal("fib flag as string not recognized")
 	}
 }

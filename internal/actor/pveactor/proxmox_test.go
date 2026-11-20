@@ -782,3 +782,17 @@ func TestProtectionAndSnapshotDefaults(t *testing.T) {
 		}
 	}
 }
+
+// TestRevertWithoutJournal: without a journal entry of the reverted order,
+// unisolate must not enable links that were down before (security review
+// 2026-11-20).
+func TestRevertWithoutJournal(t *testing.T) {
+	f := newFixture()
+	b := build(t, serverSettings(f.serve(t)))
+	o := order("unisolate")
+	o.RevertOf = "never-applied-order"
+	msg, err := b.Execute(context.Background(), o)
+	if err != nil || msg != actor.NoJournal || f.putCalls.Load() != 0 {
+		t.Fatalf("msg=%q err=%v puts=%d", msg, err, f.putCalls.Load())
+	}
+}
