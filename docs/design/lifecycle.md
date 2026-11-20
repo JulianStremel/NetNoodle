@@ -16,6 +16,23 @@ Status: proposal (D-065). User requests: easy deployment, updates of the whole s
 - The server accepts peers of the current and the previous release.
 - An actor with an incompatible version gets no new orders. Reverts are still sent.
 
+## 2a. Release channels: `latest` and `stable`
+
+| Tag (images) / channel | Points to | Moves when |
+|---|---|---|
+| `vX.Y.Z`, `vX.Y` | one release | never (`vX.Y` follows the newest patch of X.Y) |
+| `latest` | the newest release | each release tag `vX.Y.Z` |
+| `stable` | the newest **promoted** release | a promotion (below) |
+| `edge` (optional) | the newest build of `main` | each push to `main` |
+
+- **Promotion:** a release is first only `latest`. After it ran without a rollback on the canary environments for a waiting time (default 7 days), a manual workflow (`promote vX.Y.Z`) moves `stable` to it: the git branch `stable` is fast-forwarded to the release tag, and the image tag `stable` gets the SAME image digest (no new build, so the promoted bytes are exactly the tested bytes). The release notes mark it as stable.
+- A patch release (`vX.Y.Z+1`) with a security fix can be promoted at once (the waiting time is a default, not a rule).
+- **Environments follow a channel:** the server has a setting `update.channel` (`stable`, `latest` or `pinned`) and `update.auto` (on/off, with a time window, for example Sunday 03:00–05:00).
+  - Server container: an environment on `stable` uses the image tag `stable` and an updater (Watchtower, `podman auto-update`, or a systemd timer that runs `docker compose pull && up -d`) inside the window. The backup before migrations (section 3) makes this safe; a failed start leaves the old container data untouched and the restore command ready.
+  - Agents and actors: the server rolls them out to the version that belongs to its own release (agents are in the server image, section 4), so they follow the server's channel automatically, canary first.
+  - `pinned` never updates by itself (production environments that want manual control).
+- Downgrades never happen through a channel. If `stable` moves back (a bad promotion is withdrawn), environments stay on their version and show a warning.
+
 ## 3. Server update (container)
 
 1. `docker compose pull && docker compose up -d`.
