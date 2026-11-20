@@ -24,7 +24,7 @@ To test a scan without a server, run `bin/nn-scan scan -cidr 192.168.1.0/24`.
 
 ## Procedure: install the agent
 
-`nn-agent` operates on Linux (x86_64, aarch64). It only reads data. In push mode, it does not listen on a network port. For pull mode, refer to [Procedure: pull mode](#procedure-pull-mode-agent-in-a-dmz).
+`nn-agent` operates on Linux (x86_64, aarch64, armv7). It only reads data. In push mode, it does not listen on a network port. For pull mode, refer to [Procedure: pull mode](#procedure-pull-mode-agent-in-a-dmz).
 
 1. Build the static binaries (Docker is necessary):
 

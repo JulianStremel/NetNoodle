@@ -44,6 +44,7 @@ jobs:
         include:
           - { goos: linux, goarch: amd64 }
           - { goos: linux, goarch: arm64 }
+          - { goos: linux, goarch: arm, goarm: "7" } # Raspberry Pi 2 and 32-bit Pi OS
           - { goos: windows, goarch: amd64 }
           - { goos: windows, goarch: arm64 }
     steps:
@@ -55,11 +56,13 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
           CGO_ENABLED: "0"
           TAG: ${{ github.ref_name }}
         run: |
           set -eu
-          out="dist/netnoodle_${TAG}_${GOOS}_${GOARCH}"
+          arch=$GOARCH; [ "$GOARCH" = arm ] && arch=armv7
+          out="dist/netnoodle_${TAG}_${GOOS}_${arch}"
           mkdir -p "$out"
           ext=""; [ "$GOOS" = windows ] && ext=".exe"
           progs="nn-scan nn-actor"
@@ -77,7 +80,7 @@ jobs:
           rm -rf "$(basename "$out")"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: go-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: go-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.goarm }}
           path: dist/*
           retention-days: 3
 
@@ -93,11 +96,14 @@ jobs:
         include:
           - { target: x86_64-unknown-linux-musl, runner: ubuntu-24.04 }
           - { target: aarch64-unknown-linux-musl, runner: ubuntu-24.04-arm }
+          # No armv7 runner: Ubuntu's ARM cross gcc compiles ring and links;
+          # Rust ships the musl libc for the target.
+          - { target: armv7-unknown-linux-musleabihf, runner: ubuntu-24.04, cross: arm-linux-gnueabihf }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: toolchain
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
+          sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools ${{ matrix.cross && format('gcc-{0}', matrix.cross) || '' }}
           rustup toolchain install stable --profile minimal --target ${{ matrix.target }} && rustup default stable
       - name: build
         working-directory: agent
@@ -105,7 +111,14 @@ jobs:
           NN_VERSION: ${{ github.ref_name }}
         run: |
           target=${{ matrix.target }}
-          export "CC_${target//-/_}=musl-gcc"
+          cross=${{ matrix.cross }}
+          if [ -n "$cross" ]; then
+            export "CC_${target//-/_}=$cross-gcc"
+            linker="CARGO_TARGET_$(echo "${target//-/_}" | tr a-z A-Z)_LINKER"
+            export "$linker=$cross-gcc"
+          else
+            export "CC_${target//-/_}=musl-gcc"
+          fi
           cargo build --locked --release --target "$target" -p nn-agent
           file "target/$target/release/nn-agent" "target/$target/release/nn-agent-helper"
       - name: package
@@ -194,7 +207,7 @@ jobs:
         with:
           context: .
           target: ${{ matrix.target }}
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -217,6 +230,8 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - name: only release files (no docker build records)
+        run: find dist -maxdepth 1 -type f -name '*.dockerbuild' -delete
       - name: source SBOM
         uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:

@@ -6,7 +6,7 @@ Storage, releases, updates and data locations.
 
 ## Releases and channels
 
-Each release `vX.Y.Z` has binaries for Linux (x86_64, aarch64) and Windows (x86_64, ARM64), and container images on GitHub Container Registry (`ghcr.io/julianstremel/netnoodle-server`, `-scan`, `-actor`, for amd64 and arm64).
+Each release `vX.Y.Z` has binaries for Linux (x86_64, aarch64, armv7) and Windows (x86_64, ARM64), and container images on GitHub Container Registry (`ghcr.io/julianstremel/netnoodle-server`, `-scan`, `-actor`, for amd64 and arm64).
 
 | Image tag | Meaning |
 |---|---|
@@ -14,7 +14,7 @@ Each release `vX.Y.Z` has binaries for Linux (x86_64, aarch64) and Windows (x86_
 | `latest` | The newest release |
 | `stable` | The newest release that was promoted after a waiting time without problems |
 
-Verify a download before you use it:
+Verify a download before you use it. Use cosign 3 (cosign 2.4 or later needs the option `--new-bundle-format` for `verify-blob`). The host updater also needs cosign 3 in binary mode.
 
 ```sh
 cosign verify-blob --bundle SHA256SUMS.sigstore.json   --certificate-identity-regexp 'https://github.com/JulianStremel/NetNoodle/'   --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS

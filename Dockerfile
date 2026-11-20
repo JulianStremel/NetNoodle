@@ -13,12 +13,14 @@ WORKDIR /src
 ARG NN_VERSION
 ARG TARGETOS=linux
 ARG TARGETARCH
+ARG TARGETVARIANT
 RUN apk add --no-cache git
 ENV CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN version="${NN_VERSION:-$(git describe --tags --always --dirty 2>/dev/null || printf dev)}" \
+RUN export GOARM="${TARGETVARIANT#v}" \
+ && version="${NN_VERSION:-$(git describe --tags --always --dirty 2>/dev/null || printf dev)}" \
  && go build -trimpath -ldflags "-s -w -X github.com/JulianStremel/netnoodle/internal/version.Version=$version" -o /out/nn-server ./cmd/nn-server \
  && go build -trimpath -ldflags "-s -w -X github.com/JulianStremel/netnoodle/internal/version.Version=$version" -o /out/nn-scan ./cmd/nn-scan \
  && go build -trimpath -ldflags "-s -w -X github.com/JulianStremel/netnoodle/internal/version.Version=$version" -o /out/nn-actor ./cmd/nn-actor \

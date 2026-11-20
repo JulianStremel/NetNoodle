@@ -123,13 +123,15 @@ idle → downloading → staged → swapped → healthy → idle
 
 ## 5a. Build targets
 
-| Program | Linux x86_64 | Linux aarch64 | Windows x86_64 | Windows ARM64 |
-|---|---|---|---|---|
-| `nn-agent`, `nn-agent-helper` (Rust; helper Linux only) | yes (musl, static) | yes (musl, static) | yes | yes |
-| `nn-actor` (Go) | yes | yes | yes | yes |
-| `nn-scan` (Go) | yes | yes | yes | yes |
-| `nn-host-updater` (Go) | yes | yes | — | — |
-| `nn-server` (Go, container) | image amd64 | image arm64 | — | — |
+| Program | Linux x86_64 | Linux aarch64 | Linux armv7 | Windows x86_64 | Windows ARM64 |
+|---|---|---|---|---|---|
+| `nn-agent`, `nn-agent-helper` (Rust; helper Linux only) | yes (musl, static) | yes (musl, static) | yes (musl, static) | yes | yes |
+| `nn-actor` (Go) | yes | yes | yes | yes | yes |
+| `nn-scan` (Go) | yes | yes | yes | yes | yes |
+| `nn-host-updater` (Go) | yes | yes | yes | — | — |
+| `nn-server` (Go) | binary, image amd64 | binary, image arm64 | binary, image arm/v7 | — | — |
+
+The Linux agent is built natively (aarch64 on the GitHub arm64 runner). armv7 (Raspberry Pi 2, 32-bit Raspberry Pi OS) is cross-compiled with Ubuntu's `gcc-arm-linux-gnueabihf`; Rust ships the musl libc for the target.
 
 Windows ARM64 of the Rust agent: the `ring` crate compiles C code and needs clang or the MSVC ARM64 build tools. The release CI builds it natively on a Windows ARM64 runner (or with clang on x86_64). The Go programs cross-compile without extra tools.
 
