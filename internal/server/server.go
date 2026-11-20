@@ -75,6 +75,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/graph", requireUser(s.handleGraph))
 	mux.HandleFunc("GET /api/devices", requireUser(s.handleListDevices))
 	mux.HandleFunc("GET /api/devices/{id}", requireUser(s.handleGetDevice))
+	mux.HandleFunc("GET /api/devices/{id}/related", requireUser(s.handleRelated))
 	mux.HandleFunc("POST /api/devices/{id}/name", requireUser(s.handleRenameDevice))
 	mux.HandleFunc("GET /api/peers", requireUser(s.handleListPeers))
 	mux.HandleFunc("POST /api/peers/{id}/disable", requireUser(s.handleSetPeerDisabled(true)))

@@ -304,3 +304,66 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, buildGraph(devs, fs, svcs, s.now()))
 }
+
+// RelatedDevice is a device that shares a hypervisor with another one.
+type RelatedDevice struct {
+	ID       int64   `json:"id"`
+	Name     string  `json:"name"`
+	Kind     string  `json:"kind"`
+	Relation string  `json:"relation"` // host | guest | sibling
+	Risk     float64 `json:"risk"`
+	Findings int     `json:"findings"`
+	KEV      int     `json:"kev"`
+	Agent    bool    `json:"agent"`
+}
+
+// handleRelated is GET /api/devices/{id}/related: the host, the guests and
+// the other guests of the host. A problem on one of them can affect the
+// others (shared hypervisor, D-050).
+func (s *Server) handleRelated(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(r)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	ctx := r.Context()
+	devs, err := s.st.ListDevices(ctx)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	fs, err := s.st.ListFindings(ctx, store.FindingFilter{State: "open", Limit: 20000})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	g := buildGraph(devs, fs, nil, s.now())
+	byID := map[int64]*GraphNode{}
+	for i := range g.Nodes {
+		byID[g.Nodes[i].ID] = &g.Nodes[i]
+	}
+	n, ok := byID[id]
+	if !ok {
+		writeErr(w, http.StatusNotFound, "no such device")
+		return
+	}
+	out := []RelatedDevice{}
+	for _, rid := range n.Related {
+		o := byID[rid]
+		rel := "sibling"
+		switch {
+		case rid == n.Parent:
+			rel = "host"
+		case o.Parent == n.ID:
+			rel = "guest"
+		}
+		out = append(out, RelatedDevice{ID: o.ID, Name: o.Name, Kind: o.Kind, Relation: rel, Risk: o.Risk, Findings: o.Findings, KEV: o.KEV, Agent: o.Agent})
+	}
+	sort.Slice(out, func(a, b int) bool {
+		if out[a].Relation != out[b].Relation {
+			return out[a].Relation < out[b].Relation
+		}
+		return out[a].Risk > out[b].Risk
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"risk": n.Risk, "related_risk": n.RelatedRisk, "related": out})
+}

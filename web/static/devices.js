@@ -109,12 +109,23 @@ async function detail(root, id) {
       table([{ title: "Key", render: (a) => a[0] }, { title: "Value", render: (a) => a[1] }], attrs)));
   }
 
-  if (d.children.length) {
-    root.append(el("div", { class: "card" }, el("h2", {}, `Children (${d.children.length})`),
+  const rel = await api(`/api/devices/${id}/related`);
+  if (rel.related.length) {
+    const word = (r) => (!r ? "none" : r >= 9 ? "critical" : r >= 7 ? "high" : r >= 4 ? "medium" : "low");
+    const riskPill = (r) => el("span", { class: r >= 7 ? "pill bad" : r >= 4 ? "pill warn" : "pill" }, `${word(r)} ${r ? r.toFixed(1) : ""}`);
+    const warn = rel.related_risk >= 7 && rel.related_risk > rel.risk;
+    root.append(el("div", { class: "card" },
+      el("h2", {}, `Shares a hypervisor with (${rel.related.length})`),
+      el("p", { class: warn ? "error" : "muted" }, warn ?
+        `A related device has ${word(rel.related_risk)} risk (${rel.related_risk.toFixed(1)}). An attacker who controls it can possibly reach this device through the shared host.` :
+        "The host, its guests and the other guests of the host. A compromise of one of them can affect the others."),
       table([
         { title: "Device", render: (c) => el("a", { href: `#/devices/${c.id}` }, c.name || `#${c.id}`) },
+        { title: "Relation", key: "relation" },
         { title: "Kind", render: (c) => kindPill(c.kind) },
-      ], d.children)));
+        { title: "Risk", render: (c) => riskPill(c.risk) },
+        { title: "Findings", render: (c) => c.agent || c.findings ? `${c.findings}${c.kev ? ` (${c.kev} KEV)` : ""}` : el("span", { class: "muted" }, "no agent") },
+      ], rel.related)));
   }
 
   root.append(el("div", { class: "card" }, el("h2", {}, `Services (${d.services.length})`),
