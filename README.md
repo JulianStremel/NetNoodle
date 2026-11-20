@@ -523,6 +523,16 @@ The risk of a device (0 to 10) comes from its worst open finding: 70 % of the CV
 2. Write `demo.json` with `{"data_dir": "./demo-data", "matchers": [], "enrichers": []}`. The empty lists stop the vulnerability downloads, so the invented findings stay.
 3. Start the server with `go run ./cmd/nn-server -config demo.json`. Log in with the password that the server shows.
 
+## Storage
+
+The server keeps all data in one storage backend. The default is SQLite in the data directory (`netnoodle.db`); you do not have to configure it. To set it explicitly:
+
+```json
+{ "store": { "type": "sqlite", "settings": { "path": "netnoodle.db" } } }
+```
+
+The backend is a plug-in (`internal/store`, registry `store.Register`). A new backend (for example PostgreSQL) must pass the contract test suite in `internal/store/storetest`. The suite checks the guarantees that the safety of netnoodle depends on: one open proposal for each device, vulnerability and action; an approval only from the state "pending"; one order for each proposal; results only from the owning actor; single-use join tokens and pairing codes. Concurrent calls are part of the tests.
+
 ## Certificate fingerprint
 
 The server makes a self-signed TLS certificate on the first start.

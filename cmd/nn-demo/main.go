@@ -22,8 +22,9 @@ import (
 	"github.com/JulianStremel/netnoodle/internal/intel"
 	"github.com/JulianStremel/netnoodle/internal/inventory"
 	"github.com/JulianStremel/netnoodle/internal/proto"
+	"github.com/JulianStremel/netnoodle/internal/registry"
 	"github.com/JulianStremel/netnoodle/internal/store"
-	"github.com/JulianStremel/netnoodle/internal/store/sqlite"
+	_ "github.com/JulianStremel/netnoodle/internal/store/sqlite" // built-in store backend
 )
 
 type vuln struct {
@@ -253,7 +254,7 @@ func run() error {
 		return err
 	}
 	ctx := context.Background()
-	st, err := sqlite.Open(ctx, db)
+	st, err := store.Open(ctx, registry.Spec{Type: "sqlite"}, *dir)
 	if err != nil {
 		return err
 	}

@@ -18,6 +18,8 @@ type Config struct {
 	Listen string `json:"listen"`
 	// DataDir holds the database, TLS key and signing keys. Default "./data".
 	DataDir string `json:"data_dir"`
+	// Store selects the persistence backend. Default: sqlite, netnoodle.db.
+	Store registry.Spec `json:"store"`
 	// SessionTTL is the lifetime of a web UI session. Default 12h.
 	SessionTTL Duration `json:"session_ttl"`
 
@@ -73,6 +75,7 @@ func DefaultConfig() Config {
 	return Config{
 		Listen:     ":7443",
 		DataDir:    "data",
+		Store:      registry.Spec{Type: "sqlite"},
 		SessionTTL: Duration{12 * time.Hour},
 
 		ObservationRetention: Duration{7 * 24 * time.Hour},

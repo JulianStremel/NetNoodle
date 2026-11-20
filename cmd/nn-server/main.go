@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 
@@ -24,7 +23,8 @@ import (
 	pullhttps "github.com/JulianStremel/netnoodle/internal/pull/https"
 	"github.com/JulianStremel/netnoodle/internal/registry"
 	"github.com/JulianStremel/netnoodle/internal/server"
-	"github.com/JulianStremel/netnoodle/internal/store/sqlite"
+	"github.com/JulianStremel/netnoodle/internal/store"
+	_ "github.com/JulianStremel/netnoodle/internal/store/sqlite" // built-in store backend
 	"github.com/JulianStremel/netnoodle/web"
 )
 
@@ -53,7 +53,7 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	st, err := sqlite.Open(ctx, filepath.Join(cfg.DataDir, "netnoodle.db"))
+	st, err := store.Open(ctx, cfg.Store, cfg.DataDir)
 	if err != nil {
 		return err
 	}
@@ -154,7 +154,7 @@ func run() error {
 	return nil
 }
 
-func doResetAdmin(ctx context.Context, st *sqlite.DB) error {
+func doResetAdmin(ctx context.Context, st store.Store) error {
 	u, err := st.UserByName(ctx, "admin")
 	if err != nil {
 		return fmt.Errorf("user admin: %w", err)
