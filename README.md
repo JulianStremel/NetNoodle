@@ -434,6 +434,13 @@ Backend `unifi` (block a client in UniFi Network, action `isolate`, revert `unis
 - Write the MAC addresses that must never be blocked (gateway, your administrator computer) in `never_block`. The backend also refuses to block UniFi devices.
 - The backend uses the command `block-sta` of the classic Network API. Ubiquiti does not document this command. Test it with `dry_run: false` on a client that is not important before you use it.
 
+Backend `proxmox` (Proxmox VE guests, target `proxmox.guest`): refer to [deploy/nn-actor.proxmox.example.json](deploy/nn-actor.proxmox.example.json).
+
+- `isolate` sets `link_down=1` on all network interfaces of the guest. The guest keeps its MAC addresses and bridges. `unisolate` removes it again. This operates without the Proxmox firewall.
+- `snapshot` makes a snapshot `nn-<order>` (no revert).
+- Make a separate API token for the actor with only the permissions `VM.Audit`, `VM.Config.Network` and (for snapshots) `VM.Snapshot`. Do not use the read-only token of the import.
+- Write the VM IDs that must never be isolated in `never_isolate`.
+
 When you approve a decision on the **Actions** page, the server sends an order to an actor that can do the action for the device. The **Actions** page shows the state of the order. After the TTL, the server sends the revert order.
 
 ## Map page
