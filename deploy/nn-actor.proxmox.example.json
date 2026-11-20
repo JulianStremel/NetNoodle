@@ -13,6 +13,7 @@
         "scope": "Grant the role on the permitted pool or VM path.",
         "token": "Use a privilege-separated API token; both the user and token need the scoped permissions.",
         "identity": "source must match the Proxmox source name in netnoodle; replace cluster-name in allow targets with the API cluster name, or standalone for a single node.",
+        "protection": "never_isolate must include all management, router and VPN guests. Empty lists require allow_empty_never_isolate: true. max_snapshots caps snapshots named nn-* per guest (default 3).",
         "secret": "Store the token secret in the file below (mode 0600 recommended). Set exactly one of token_secret and token_secret_file."
       }
     },
@@ -26,7 +27,9 @@
         "fingerprint": "REPLACE_WITH_PVE_CERTIFICATE_SHA256_HEX",
         "insecure_skip_verify": false,
         "source": "pve",
-        "never_isolate": [100, 101]
+        "never_isolate": [100, 101],
+        "allow_empty_never_isolate": false,
+        "max_snapshots": 3
       }
     }
   ],

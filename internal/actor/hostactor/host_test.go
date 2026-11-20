@@ -24,22 +24,10 @@ var fullChainFixture string
 
 // Fixture follows nft -j list chain output, including handles and metadata.
 func chainFixture(kinds ...int) string {
-	var fixture struct {
-		Nftables []struct {
-			Rule struct {
-				Expr json.RawMessage `json:"expr"`
-			} `json:"rule"`
-		} `json:"nftables"`
-	}
-	if err := json.Unmarshal([]byte(fullChainFixture), &fixture); err != nil {
-		panic(err)
-	}
 	entries := []string{`{"chain":{"family":"inet","table":"netnoodle","name":"input","type":"filter","hook":"input","prio":-10,"policy":"accept"}}`}
+	kinds = append([]int{3}, kinds...)
 	for i, kind := range kinds {
-		expr, err := json.Marshal(fixture.Nftables[kind+2].Rule.Expr)
-		if err != nil {
-			panic(err)
-		}
+		expr := []byte(ruleExpressions[kind])
 		entries = append(entries, fmt.Sprintf(`{"rule":{"family":"inet","table":"netnoodle","chain":"input","handle":%d,"expr":%s}}`, i+10, expr))
 	}
 	return `{"nftables":[` + strings.Join(entries, ",") + `]}`
@@ -92,7 +80,7 @@ func (f *fakeRunner) Run(ctx context.Context, program string, args []string, std
 			f.t.Fatalf("unexpected nft invocation: %+v", c)
 		}
 		if args[2] == "chain" {
-			return []byte(f.chain), nil, nil
+			return []byte(strings.ReplaceAll(f.chain, `"input"`, fmt.Sprintf(`"%s"`, args[5]))), nil, nil
 		}
 		return []byte(f.sets[args[5]]), nil, nil
 	}
@@ -126,16 +114,20 @@ func TestBlockScriptAndArguments(t *testing.T) {
 	if err != nil || msg != "ports blocked; verified" {
 		t.Fatalf("message=%q error=%v", msg, err)
 	}
-	want := []call{
-		{"/usr/sbin/nft", []string{"-f", "-"}, "add table inet netnoodle\nadd set inet netnoodle blocked_tcp { type inet_service; flags timeout; }\nadd set inet netnoodle blocked_udp { type inet_service; flags timeout; }\nadd chain inet netnoodle input { type filter hook input priority -10; policy accept; }\n"},
-		{"/usr/sbin/nft", []string{"-j", "list", "chain", "inet", "netnoodle", "input"}, ""},
-		{"/usr/sbin/nft", []string{"-f", "-"}, "insert rule inet netnoodle input iifname \"lo\" accept\nadd rule inet netnoodle input tcp dport @blocked_tcp drop\nadd rule inet netnoodle input udp dport @blocked_udp drop\n"},
-		{"/usr/sbin/nft", []string{"-f", "-"}, "add element inet netnoodle blocked_tcp { 443 timeout 3600s }\nadd element inet netnoodle blocked_udp { 53 timeout 3600s }\n"},
-		{"/usr/sbin/nft", []string{"-j", "list", "set", "inet", "netnoodle", "blocked_tcp"}, ""},
-		{"/usr/sbin/nft", []string{"-j", "list", "set", "inet", "netnoodle", "blocked_udp"}, ""},
+	var scripts string
+	for _, c := range f.calls {
+		scripts += c.stdin
+		if c.stdin != "" && (c.program != "/usr/sbin/nft" || !reflect.DeepEqual(c.args, []string{"-f", "-"})) {
+			t.Fatalf("bad script invocation: %+v", c)
+		}
 	}
-	if !reflect.DeepEqual(f.calls, want) {
-		t.Fatalf("commands:\n%+v\nwant:\n%+v", f.calls, want)
+	for _, want := range []string{"hook input priority -10", "hook prerouting priority -150", "input iifname \"lo\" accept", "prerouting iifname \"lo\" accept", "input ct state established,related accept", "prerouting ct state established,related accept", "input tcp dport @blocked_tcp drop", "prerouting udp dport @blocked_udp drop", "443 timeout 3600s", "53 timeout 3600s"} {
+		if !strings.Contains(scripts, want) {
+			t.Errorf("missing %q in %s", want, scripts)
+		}
+	}
+	if strings.Count(scripts, "add element inet netnoodle blocked_tcp") != 1 || strings.Count(scripts, "add element inet netnoodle blocked_udp") != 1 {
+		t.Fatal("ports not deduplicated")
 	}
 }
 
@@ -147,8 +139,8 @@ func TestRulesOnlyAddedWhenMissing(t *testing.T) {
 		{"full JSON fixture", fullChainFixture, ""},
 		{"missing udp", chainFixture(0, 1), "add rule inet netnoodle input udp dport @blocked_udp drop\n"},
 		{"missing loopback", chainFixture(1, 2), "insert rule inet netnoodle input iifname \"lo\" accept\n"},
-		{"duplicates", chainFixture(0, 1, 1, 2), "delete rule inet netnoodle input handle 12\n"},
-		{"late loopback", chainFixture(1, 0, 2), "delete rule inet netnoodle input handle 11\ninsert rule inet netnoodle input iifname \"lo\" accept\n"},
+		{"duplicates", chainFixture(0, 1, 1, 2), "delete rule inet netnoodle input handle 13\n"},
+		{"late loopback", chainFixture(1, 0, 2), "delete rule inet netnoodle input handle 12\ninsert rule inet netnoodle input iifname \"lo\" accept\n"},
 		{"set in operator", strings.ReplaceAll(chainFixture(0, 1, 2), `"op":"==","left":{"payload"`, `"op":"in","left":{"payload"`), ""},
 		{"counter", strings.Replace(chainFixture(0, 1, 2), `{"drop":null}`, `{"counter":{"packets":2,"bytes":100}},{"drop":null}`, 1), ""},
 	} {
@@ -156,7 +148,7 @@ func TestRulesOnlyAddedWhenMissing(t *testing.T) {
 			f := newFake(t)
 			f.chain = tc.fixture
 			b := build(t, `{"agent":"web01"}`, f)
-			if err := b.ensureRules(context.Background()); err != nil {
+			if err := b.ensureChainRules(context.Background(), "input"); err != nil {
 				t.Fatal(err)
 			}
 			if len(f.calls) == 1 && tc.want == "" {
@@ -178,7 +170,7 @@ func TestRulesOnlyAddedWhenMissing(t *testing.T) {
 	if _, err := b.execute(context.Background(), order("block-port")); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.calls) != 4 {
+	if len(f.calls) != 6 {
 		t.Fatalf("second order added rules: %+v", f.calls)
 	}
 }
@@ -203,7 +195,7 @@ func TestTTL(t *testing.T) {
 			if _, err := b.execute(context.Background(), o); err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(f.calls[2].stdin, fmt.Sprintf("timeout %ds", tc.want)) {
+			if !strings.Contains(f.calls[len(f.calls)-2].stdin, fmt.Sprintf("timeout %ds", tc.want)) {
 				t.Fatalf("wrong TTL: %+v", f.calls)
 			}
 		})
@@ -227,7 +219,7 @@ func TestLocalRefusalsMakeNoCommands(t *testing.T) {
 		[]string{"443"}, []string{"443/TCP"}, []string{"443/sctp"}, []string{"443/tcp/udp"},
 		[]string{"443/tcp; flush ruleset"}, []string{"443\n/tcp"},
 		strings.Split(strings.Repeat("443/tcp,", 32)+"443/tcp", ","),
-		[]string{"443/tcp", "22/tcp"}, []string{"22/udp"},
+		[]string{"443/tcp", "22/tcp"}, []string{"22/udp"}, []string{"7444/tcp"},
 	} {
 		o := order("block-port")
 		o.Params["ports"] = ports
@@ -272,7 +264,7 @@ func TestUnblockProtectedAndExpiredPorts(t *testing.T) {
 	if _, err := b.execute(context.Background(), o); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.calls) != 5 || f.calls[1].stdin != "delete element inet netnoodle blocked_tcp { 22 }\n" || f.calls[3].stdin != "delete element inet netnoodle blocked_tcp { 443 }\n" {
+	if len(f.calls) != 6 || f.calls[1].stdin != "delete element inet netnoodle blocked_tcp { 22 }\n" || f.calls[4].stdin != "delete element inet netnoodle blocked_tcp { 443 }\n" {
 		t.Fatalf("unblock commands=%+v", f.calls)
 	}
 }
@@ -323,6 +315,12 @@ func TestServices(t *testing.T) {
 				t.Fatalf("error=%v", err)
 			}
 			wantCalls := 2
+			if tc.action == "stop-service" {
+				wantCalls = 3
+				if tc.exit == 4 {
+					wantCalls = 1
+				}
+			}
 			if tc.settings == "[]" {
 				wantCalls = 0
 			}
@@ -345,7 +343,7 @@ func TestServices(t *testing.T) {
 }
 
 func TestVerificationFailures(t *testing.T) {
-	for _, elements := range []string{`[]`, `[443]`, `[{"elem":{"val":443,"timeout":0}}]`, `[{"elem":{"val":443,"timeout":3601}}]`, `[{"elem":{"val":444,"timeout":3600}}]`, `[{}]`, `[null]`} {
+	for _, elements := range []string{`[]`, `[443]`, `[{"elem":{"val":443,"timeout":0}}]`, `[{"elem":{"val":443,"timeout":3601}}]`, `[{"elem":{"val":443,"timeout":60}}]`, `[{"elem":{"val":444,"timeout":3600}}]`, `[{}]`, `[null]`} {
 		t.Run(elements, func(t *testing.T) {
 			f := newFake(t)
 			f.sets["blocked_tcp"] = setFixture("tcp", elements)
@@ -363,7 +361,7 @@ func TestVerificationFailures(t *testing.T) {
 		return nil, nil, nil, false
 	}
 	b := build(t, `{"agent":"web01"}`, f)
-	if _, err := b.execute(context.Background(), order("unblock-port")); err == nil || !strings.Contains(err.Error(), "Operation not permitted") {
+	if _, err := b.execute(context.Background(), order("unblock-port")); err == nil || !strings.Contains(err.Error(), "rc 1") {
 		t.Fatalf("unblock error=%v", err)
 	}
 }
@@ -393,10 +391,10 @@ func TestSettings(t *testing.T) {
 		t.Fatalf("incorrect defaults: %+v", b)
 	}
 	if !reflect.DeepEqual(b.Capabilities(), []proto.Capability{
-		{Action: "block-port", TargetIDKinds: []string{"agent"}, Reversible: true, RevertAction: "unblock-port"},
-		{Action: "unblock-port", TargetIDKinds: []string{"agent"}},
-		{Action: "stop-service", TargetIDKinds: []string{"agent"}, Reversible: true, RevertAction: "start-service"},
-		{Action: "start-service", TargetIDKinds: []string{"agent"}},
+		{Action: "block-port", TargetIDKinds: []string{"agent"}, TargetScope: []string{"agent=web01"}, Reversible: true, RevertAction: "unblock-port"},
+		{Action: "unblock-port", TargetIDKinds: []string{"agent"}, TargetScope: []string{"agent=web01"}},
+		{Action: "stop-service", TargetIDKinds: []string{"agent"}, TargetScope: []string{"agent=web01"}, Reversible: true, RevertAction: "start-service"},
+		{Action: "start-service", TargetIDKinds: []string{"agent"}, TargetScope: []string{"agent=web01"}},
 	}) {
 		t.Fatal("incorrect capabilities")
 	}
@@ -424,7 +422,7 @@ func TestCommandErrorsAndLimits(t *testing.T) {
 			}
 			b := build(t, `{"agent":"web01"}`, f)
 			_, err := b.execute(context.Background(), order("block-port"))
-			if err == nil || len(err.Error()) > 700 || (stream != "error" && !strings.Contains(err.Error(), "1 MiB")) || (stream == "error" && !strings.Contains(err.Error(), "diagnostic:")) {
+			if err == nil || len(err.Error()) > 700 || (stream != "error" && !strings.Contains(err.Error(), "1 MiB")) || (stream == "error" && (!strings.Contains(err.Error(), "rc 1") || strings.Contains(err.Error(), "diagnostic:"))) {
 				t.Fatalf("unsafe command error: %v", err)
 			}
 		})

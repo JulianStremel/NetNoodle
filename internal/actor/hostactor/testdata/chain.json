@@ -6,6 +6,10 @@
       {"match": {"op": "==", "left": {"meta": {"key": "iifname"}}, "right": "lo"}},
       {"accept": null}
     ]}},
+    {"rule": {"family": "inet", "table": "netnoodle", "chain": "input", "handle": 7, "expr": [
+      {"match": {"op": "in", "left": {"ct": {"key": "state"}}, "right": {"set": ["established", "related"]}}},
+      {"accept": null}
+    ]}},
     {"rule": {"family": "inet", "table": "netnoodle", "chain": "input", "handle": 5, "expr": [
       {"match": {"op": "==", "left": {"payload": {"protocol": "tcp", "field": "dport"}}, "right": "@blocked_tcp"}},
       {"drop": null}

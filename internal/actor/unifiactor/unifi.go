@@ -30,14 +30,15 @@ const deviceCacheTTL = 5 * time.Minute
 // Settings configure the console, credentials, TLS trust and local protection.
 // APIKeyFile is read once at construction; mode 0600 is recommended.
 type Settings struct {
-	URL         string   `json:"url"`
-	APIKey      string   `json:"api_key"`
-	APIKeyFile  string   `json:"api_key_file"`
-	Fingerprint string   `json:"fingerprint"`
-	Insecure    bool     `json:"insecure_skip_verify"`
-	Site        string   `json:"site"`
-	ClassicPath string   `json:"classic_path"`
-	NeverBlock  []string `json:"never_block"`
+	URL             string   `json:"url"`
+	APIKey          string   `json:"api_key"`
+	APIKeyFile      string   `json:"api_key_file"`
+	Fingerprint     string   `json:"fingerprint"`
+	Insecure        bool     `json:"insecure_skip_verify"`
+	Site            string   `json:"site"`
+	ClassicPath     string   `json:"classic_path"`
+	ProtectMACsFile string   `json:"protect_macs_file"`
+	NeverBlock      []string `json:"never_block"`
 }
 
 // Backend implements the isolate and unisolate actions for MAC targets.
@@ -50,6 +51,7 @@ type Backend struct {
 	mu         sync.Mutex
 	devices    map[string]bool
 	devicesAt  time.Time
+	journal    *actor.Journal
 }
 
 func init() { actor.Registry.Register("unifi", New) }
@@ -85,6 +87,24 @@ func New(name string, raw json.RawMessage) (actor.Backend, error) {
 	if !strings.HasPrefix(s.ClassicPath, "/") || path.Clean(s.ClassicPath) != s.ClassicPath || strings.ContainsAny(s.ClassicPath, "\\?#%") {
 		return nil, errors.New("unifi: classic_path must be an absolute API path")
 	}
+	if s.ProtectMACsFile != "" {
+		data, e := os.ReadFile(s.ProtectMACsFile)
+		if e != nil {
+			return nil, errors.New("unifi: cannot read protect_macs_file")
+		}
+		s.NeverBlock = append(s.NeverBlock, strings.Fields(string(data))...)
+	}
+	interfaces, e := net.Interfaces()
+	if e != nil {
+		return nil, errors.New("unifi: cannot enumerate local interfaces")
+	}
+	for _, iface := range interfaces {
+		if len(iface.HardwareAddr) == 6 {
+			mac := iface.HardwareAddr.String()
+			s.NeverBlock = append(s.NeverBlock, mac)
+			slog.Info("UniFi actor protecting local MAC", "interface", iface.Name, "mac", mac)
+		}
+	}
 	protected := make(map[string]bool, len(s.NeverBlock))
 	for _, value := range s.NeverBlock {
 		mac, err := normalizeMAC(value)
@@ -100,8 +120,10 @@ func New(name string, raw json.RawMessage) (actor.Backend, error) {
 	if s.Insecure {
 		slog.Warn("UniFi actor insecure_skip_verify enabled; configure a TLS fingerprint or trusted certificate")
 	}
-	return &Backend{name: name, base: strings.TrimRight(s.URL, "/") + s.ClassicPath + "/s/" + url.PathEscape(s.Site), key: s.APIKey, client: c, neverBlock: protected}, nil
+	return &Backend{name: name, base: strings.TrimRight(s.URL, "/") + s.ClassicPath + "/s/" + url.PathEscape(s.Site), key: s.APIKey, client: c, neverBlock: protected, journal: &actor.Journal{}}, nil
 }
+
+func (b *Backend) SetJournal(j *actor.Journal) { b.journal = j }
 
 func (b *Backend) Name() string { return b.name }
 
@@ -122,9 +144,10 @@ func normalizeMAC(value string) (string, error) {
 
 // Execute protects infrastructure before changing a single client's block state.
 func (b *Backend) Execute(ctx context.Context, o proto.Order) (message string, err error) {
+	sent := false
 	defer func() {
-		if err != nil {
-			err = errors.New(strings.ReplaceAll(err.Error(), b.key, "[redacted]"))
+		if err != nil && sent {
+			err = fmt.Errorf("%w: %w", actor.ErrPossiblyApplied, err)
 		}
 	}()
 	if len(o.Targets) != 1 || o.Targets[0].Kind != "mac" {
@@ -152,10 +175,25 @@ func (b *Backend) Execute(ctx context.Context, o proto.Order) (message string, e
 			return "", err
 		}
 	}
+	if blocked {
+		prior, e := b.blockedState(ctx, mac)
+		if e != nil {
+			return "", e
+		}
+		if e = b.journal.Put(o.ID, actor.JournalEntry{Backend: b.name, Target: mac, Action: o.Action, Expires: actor.OrderExpiry(o.TTL, o.NotAfter), Prior: prior}); e != nil {
+			return "", e
+		}
+		if prior {
+			return "already blocked; left as is", nil
+		}
+	} else if prior, ok := b.journal.Get(o.RevertOf, b.name, mac, "isolate"); ok && prior.Prior {
+		return "block was pre-existing; left blocked", nil
+	}
 	payload, _ := json.Marshal(struct {
 		Cmd string `json:"cmd"`
 		MAC string `json:"mac"`
 	}{cmd, mac})
+	sent = true
 	body, _, err := b.request(ctx, http.MethodPost, "/cmd/stamgr", payload)
 	if err != nil {
 		return "", err
@@ -205,7 +243,11 @@ type response struct {
 
 func (r response) checkRC(required bool) error {
 	if r.Meta.RC != "ok" && (required || r.Meta.RC != "") {
-		return fmt.Errorf("unifi: API rc %q: %s", r.Meta.RC, r.Meta.Msg)
+		// rc is upstream-controlled too: only the documented error code is safe.
+		if r.Meta.RC == "error" {
+			return errors.New("unifi: API rc error")
+		}
+		return errors.New("unifi: API rc invalid or missing")
 	}
 	return nil
 }
@@ -258,12 +300,12 @@ func (b *Backend) request(ctx context.Context, method, endpoint string, payload 
 	}
 	res, err := b.client.Do(req)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, errors.New("unifi: API transport failed")
 	}
 	defer res.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(res.Body, maxResponseBody+1))
 	if err != nil {
-		return nil, res.StatusCode, err
+		return nil, res.StatusCode, errors.New("unifi: API response read failed")
 	}
 	if len(body) > maxResponseBody {
 		return nil, res.StatusCode, errors.New("unifi: response exceeds 4 MiB")
@@ -272,12 +314,38 @@ func (b *Backend) request(ctx context.Context, method, endpoint string, payload 
 		return nil, res.StatusCode, nil
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		// Preserve API diagnostics without echoing arbitrary bodies or status text.
-		var result response
-		if json.Unmarshal(body, &result) == nil && (result.Meta.RC != "" || result.Meta.Msg != "") {
-			return nil, res.StatusCode, fmt.Errorf("unifi: %s %s: HTTP %d; API rc %q: %s", method, endpoint, res.StatusCode, strings.ReplaceAll(result.Meta.RC, b.key, "[redacted]"), strings.ReplaceAll(result.Meta.Msg, b.key, "[redacted]"))
-		}
-		return nil, res.StatusCode, fmt.Errorf("unifi: %s %s: HTTP %d", method, endpoint, res.StatusCode)
+		return nil, res.StatusCode, fmt.Errorf("unifi: API HTTP %d", res.StatusCode)
 	}
 	return body, res.StatusCode, nil
+}
+
+// Unknown clients may still be blocked by MAC. Malformed or failed reads must
+// stop isolation before the mutation, since prior state cannot be preserved.
+func (b *Backend) blockedState(ctx context.Context, mac string) (bool, error) {
+	body, status, err := b.request(ctx, http.MethodGet, "/stat/user/"+mac, nil)
+	if err != nil {
+		return false, err
+	}
+	if status == 404 || len(bytes.TrimSpace(body)) == 0 {
+		return false, nil
+	}
+	var users struct {
+		response
+		Data []struct {
+			Blocked *bool `json:"blocked"`
+		} `json:"data"`
+	}
+	if json.Unmarshal(body, &users) != nil {
+		return false, errors.New("unifi: invalid prior-state response JSON")
+	}
+	if err = users.checkRC(false); err != nil {
+		return false, err
+	}
+	if len(users.Data) == 0 {
+		return false, nil
+	}
+	if len(users.Data) != 1 || users.Data[0].Blocked == nil {
+		return false, errors.New("unifi: invalid prior blocked state")
+	}
+	return *users.Data[0].Blocked, nil
 }

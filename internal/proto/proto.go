@@ -117,6 +117,8 @@ type Capability struct {
 	ParamsSchema  map[string]any `json:"params_schema,omitempty"`
 	Reversible    bool           `json:"reversible"`
 	RevertAction  string         `json:"revert_action,omitempty"`
+	// TargetScope contains kind=glob patterns; empty permits any target.
+	TargetScope []string `json:"target_scope,omitempty"`
 }
 
 // ActorHello is sent by an actor when it connects.
@@ -158,6 +160,9 @@ const (
 	OrderFailed   OrderStatus = "failed"
 	OrderRejected OrderStatus = "rejected" // signature, expiry, nonce or allowlist check failed
 )
+
+// OrderUncertain reports a sent mutation whose outcome could not be confirmed.
+const OrderUncertain OrderStatus = "uncertain"
 
 // OrderResult is sent by the actor after it handled an order.
 type OrderResult struct {

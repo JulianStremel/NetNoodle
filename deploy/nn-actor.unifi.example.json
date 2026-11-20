@@ -5,6 +5,15 @@
   "max_per_hour": 20,
   "backends": [
     {
+      "type": "documentation",
+      "name": "UniFi protection (documentation only)",
+      "disabled": true,
+      "settings": {
+        "never_block": "Add the controller host and nn-server host MAC addresses. The actor host's local MACs are protected and logged automatically.",
+        "protect_macs_file": "Optional path to a whitespace-separated list of protected MAC addresses, read at startup."
+      }
+    },
+    {
       "type": "unifi",
       "name": "unifi",
       "settings": {

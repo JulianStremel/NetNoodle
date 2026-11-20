@@ -25,7 +25,7 @@ var tableName = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
 var serviceName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.@:\\-]*\.service$`)
 
 // Settings bind this backend to this host's agent peer name. Empty Services
-// refuses both service actions. NeverBlockPorts defaults to [22] only when
+// refuses both service actions. NeverBlockPorts defaults to [22, 7444] only when
 // omitted; an explicit empty array permits every otherwise valid port.
 type Settings struct {
 	Agent           string   `json:"agent"`
@@ -51,6 +51,7 @@ type Backend struct {
 	neverBlock map[int]bool
 	services   map[string]bool
 	runner     Runner
+	journal    *actor.Journal
 	mu         sync.Mutex // serialize rule discovery and creation
 }
 
@@ -64,7 +65,7 @@ func New(name string, raw json.RawMessage) (actor.Backend, error) {
 // NewWithRunner supports testing command planning without host privileges.
 // Execute still refuses every order on non-Linux platforms.
 func NewWithRunner(name string, raw json.RawMessage, runner Runner) (*Backend, error) {
-	s := Settings{NFT: "/usr/sbin/nft", Table: "netnoodle", MaxTTL: "24h", Systemctl: "/usr/bin/systemctl", NeverBlockPorts: []int{22}}
+	s := Settings{NFT: "/usr/sbin/nft", Table: "netnoodle", MaxTTL: "24h", Systemctl: "/usr/bin/systemctl", NeverBlockPorts: []int{22, 7444}}
 	if !json.Valid(raw) || registry.Decode(raw, &s) != nil || strings.TrimSpace(s.Agent) == "" || strings.ContainsAny(s.Agent, "\x00\r\n") {
 		return nil, errors.New("host: invalid settings (agent is required; malformed JSON or unknown fields refused)")
 	}
@@ -106,16 +107,18 @@ func NewWithRunner(name string, raw json.RawMessage, runner Runner) (*Backend, e
 	if runner == nil {
 		return nil, errors.New("host: command runner is required")
 	}
-	return &Backend{name: name, settings: s, maxTTL: int64(ttl / time.Second), neverBlock: protected, services: services, runner: runner}, nil
+	return &Backend{name: name, settings: s, maxTTL: int64(ttl / time.Second), neverBlock: protected, services: services, runner: runner, journal: &actor.Journal{}}, nil
 }
+
+func (b *Backend) SetJournal(j *actor.Journal) { b.journal = j }
 
 func (b *Backend) Name() string { return b.name }
 
 func (b *Backend) Capabilities() []proto.Capability {
 	return []proto.Capability{
-		{Action: "block-port", TargetIDKinds: []string{"agent"}, Reversible: true, RevertAction: "unblock-port"},
-		{Action: "unblock-port", TargetIDKinds: []string{"agent"}},
-		{Action: "stop-service", TargetIDKinds: []string{"agent"}, Reversible: true, RevertAction: "start-service"},
-		{Action: "start-service", TargetIDKinds: []string{"agent"}},
+		{Action: "block-port", TargetIDKinds: []string{"agent"}, TargetScope: []string{"agent=" + b.settings.Agent}, Reversible: true, RevertAction: "unblock-port"},
+		{Action: "unblock-port", TargetIDKinds: []string{"agent"}, TargetScope: []string{"agent=" + b.settings.Agent}},
+		{Action: "stop-service", TargetIDKinds: []string{"agent"}, TargetScope: []string{"agent=" + b.settings.Agent}, Reversible: true, RevertAction: "start-service"},
+		{Action: "start-service", TargetIDKinds: []string{"agent"}, TargetScope: []string{"agent=" + b.settings.Agent}},
 	}
 }

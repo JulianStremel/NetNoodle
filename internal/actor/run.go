@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/JulianStremel/netnoodle/internal/client"
 	"github.com/JulianStremel/netnoodle/internal/orders"
@@ -42,6 +43,7 @@ type Runner struct {
 	Now        func() time.Time
 	executed   []time.Time
 	outbox     *resultOutbox
+	Journal    *Journal
 }
 
 // maxOrderLife is the longest order validity the actor accepts.
@@ -86,11 +88,20 @@ func NewRunner(cfg Config, creds client.Credentials) (*Runner, error) {
 	if e = validateRevertAllow(cfg.Allow, bs); e != nil {
 		return nil, e
 	}
+	journal, e := OpenJournal(cfg.NonceFile + ".journal")
+	if e != nil {
+		return nil, e
+	}
+	for _, b := range bs {
+		if aware, ok := b.(JournalAware); ok {
+			aware.SetJournal(journal)
+		}
+	}
 	outbox, e := openOutbox(cfg.NonceFile + ".outbox")
 	if e != nil {
 		return nil, e
 	}
-	return &Runner{outbox: outbox, Name: creds.Name, Key: key, Nonces: ns, Backends: bs, Allow: cfg.Allow, DryRun: cfg.DryRun == nil || *cfg.DryRun, MaxPerHour: cfg.MaxPerHour, Now: time.Now}, nil
+	return &Runner{outbox: outbox, Journal: journal, Name: creds.Name, Key: key, Nonces: ns, Backends: bs, Allow: cfg.Allow, DryRun: cfg.DryRun == nil || *cfg.DryRun, MaxPerHour: cfg.MaxPerHour, Now: time.Now}, nil
 }
 func (r *Runner) allowed(o proto.Order) bool {
 	if len(o.Targets) == 0 {
@@ -124,10 +135,12 @@ func (r *Runner) allowed(o proto.Order) bool {
 }
 
 // Handle is called serially by Run. Only a verified, fresh, locally permitted
-// order can reach a backend. Reverts bypass the hourly rate limit.
-func (r *Runner) Handle(ctx context.Context, env orders.Envelope) proto.OrderResult {
+// order can reach a backend. Only configured inverse actions marked Revert
+// bypass the hourly rate limit.
+func (r *Runner) Handle(ctx context.Context, env orders.Envelope) (res proto.OrderResult) {
+	defer func() { res.Message = truncateMessage(res.Message) }()
 	now := r.Now()
-	res := proto.OrderResult{Version: proto.Version, Status: proto.OrderRejected, At: now}
+	res = proto.OrderResult{Version: proto.Version, Status: proto.OrderRejected, At: now}
 	o, e := orders.Verify(r.Key, env)
 	if e != nil {
 		var id struct {
@@ -168,7 +181,7 @@ func (r *Runner) Handle(ctx context.Context, env orders.Envelope) proto.OrderRes
 			}
 			ok := true
 			for _, t := range o.Targets {
-				if !slices.Contains(c.TargetIDKinds, t.Kind) {
+				if !slices.Contains(c.TargetIDKinds, t.Kind) || !matchesScope(c.TargetScope, t) {
 					ok = false
 				}
 			}
@@ -184,6 +197,18 @@ func (r *Runner) Handle(ctx context.Context, env orders.Envelope) proto.OrderRes
 	if backend == nil {
 		return reject("no backend for action and targets")
 	}
+	validRevert := false
+	for _, b := range r.Backends {
+		for _, c := range b.Capabilities() {
+			if c.RevertAction != "" && c.RevertAction == o.Action {
+				validRevert = true
+			}
+		}
+	}
+	if o.Revert && !validRevert {
+		return reject("invalid revert action")
+	}
+	exempt := o.Revert && validRevert
 	keep := r.executed[:0]
 	for _, at := range r.executed {
 		if at.After(now.Add(-time.Hour)) {
@@ -191,10 +216,10 @@ func (r *Runner) Handle(ctx context.Context, env orders.Envelope) proto.OrderRes
 		}
 	}
 	r.executed = keep
-	if !o.Revert && len(r.executed) >= r.MaxPerHour {
+	if !exempt && len(r.executed) >= r.MaxPerHour {
 		return reject("hourly rate limit exceeded")
 	}
-	if !o.Revert {
+	if !exempt {
 		r.executed = append(r.executed, now)
 	}
 	res.Status = proto.OrderDone
@@ -206,6 +231,10 @@ func (r *Runner) Handle(ctx context.Context, env orders.Envelope) proto.OrderRes
 	if e != nil {
 		res.Status = proto.OrderFailed
 		res.Message = e.Error()
+		if errors.Is(e, ErrPossiblyApplied) {
+			res.Status = proto.OrderUncertain
+			res.Message = "possibly applied: " + e.Error()
+		}
 	}
 	return res
 }
@@ -258,9 +287,7 @@ func (r *Runner) Run(ctx context.Context, c Protocol) error {
 					continue
 				}
 				res := r.Handle(ctx, env)
-				if len(res.Message) > 4096 {
-					res.Message = res.Message[:4096]
-				}
+
 				if e := r.outbox.add(res); e != nil {
 					return e
 				}
@@ -336,4 +363,36 @@ func coversTarget(inverse, forward string) bool {
 	}
 	prefix := strings.TrimSuffix(iv, "*")
 	return !strings.ContainsAny(prefix, "*?[\\") && !strings.ContainsAny(fv, "?[\\") && strings.HasPrefix(fv, prefix) && !strings.Contains(strings.TrimPrefix(fv, prefix), "/")
+}
+
+// Scope globs use path.Match; a trailing /* covers the whole identifier subtree
+// (including source/cluster/vmid). Empty scope preserves v1's unrestricted scope.
+func matchesScope(patterns []string, t proto.Identifier) bool {
+	if len(patterns) == 0 {
+		return true
+	}
+	for _, pattern := range patterns {
+		kind, glob, ok := strings.Cut(pattern, "=")
+		if !ok || kind != t.Kind {
+			continue
+		}
+		if matched, err := path.Match(glob, t.Value); err == nil && matched {
+			return true
+		}
+		if strings.HasSuffix(glob, "/*") && !strings.ContainsAny(strings.TrimSuffix(glob, "/*"), "*?[\\") && strings.HasPrefix(t.Value, strings.TrimSuffix(glob, "*")) {
+			return true
+		}
+	}
+	return false
+}
+func truncateMessage(s string) string {
+	s = strings.ToValidUTF8(s, "?")
+	if len(s) <= 4000 {
+		return s
+	}
+	n := 4000
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }

@@ -40,11 +40,46 @@ func TestLiveNFT(t *testing.T) {
 			t.Log(msg)
 		}
 	}
-	out, _ := exec.Command(nft, "list", "table", "inet", "netnoodle").CombinedOutput()
+	out, _ := exec.Command(nft, "-y", "list", "table", "inet", "netnoodle").CombinedOutput()
 	s := string(out)
 	t.Log(s)
-	if !strings.Contains(s, "443") || !strings.Contains(s, "53") || strings.Count(s, "@blocked_tcp") != 1 || !strings.Contains(s, "timeout") {
+	if !strings.Contains(s, "443") || !strings.Contains(s, "53") || strings.Count(s, "@blocked_tcp") != 2 || strings.Count(s, "ct state established,related accept") != 2 || !strings.Contains(s, "hook prerouting priority mangle") && !strings.Contains(s, "hook prerouting priority -150") || !strings.Contains(s, "timeout") {
 		t.Fatalf("unexpected ruleset:\n%s", s)
+	}
+	for _, chain := range []string{"input", "prerouting"} {
+		out, e := exec.Command(nft, "-j", "list", "chain", "inet", "netnoodle", chain).Output()
+		if e != nil {
+			t.Fatal(e)
+		}
+		var doc nftDocument
+		if e = json.Unmarshal(out, &doc); e != nil {
+			t.Fatal(e)
+		}
+		seen := [4]bool{}
+		dropSeen := false
+		for _, entry := range doc.Nftables {
+			if entry.Rule == nil {
+				continue
+			}
+			k := ruleKind(entry.Rule.Expr)
+			if k < 0 {
+				continue
+			}
+			if seen[k] {
+				t.Fatalf("duplicate rule in %s", chain)
+			}
+			seen[k] = true
+			if k == 1 || k == 2 {
+				dropSeen = true
+			} else if dropSeen {
+				t.Fatalf("late accept rule in %s", chain)
+			}
+		}
+		for _, ok := range seen {
+			if !ok {
+				t.Fatalf("missing protection in %s", chain)
+			}
+		}
 	}
 	if _, err := b.Execute(ctx, order("unblock-port")); err != nil {
 		t.Fatalf("unblock: %v", err)

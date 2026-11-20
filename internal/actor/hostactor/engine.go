@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/JulianStremel/netnoodle/internal/actor"
 	"github.com/JulianStremel/netnoodle/internal/proto"
 )
 
@@ -56,7 +59,14 @@ func parsePorts(value any) ([]port, error) {
 
 // execute is portable command planning, used only by the Linux entry point
 // and fake-runner tests. Validate the whole order before the first command.
-func (b *Backend) execute(ctx context.Context, o proto.Order) (string, error) {
+func (b *Backend) execute(ctx context.Context, o proto.Order) (message string, err error) {
+	sent := false
+	ctx = context.WithValue(ctx, mutationKey{}, &sent)
+	defer func() {
+		if err != nil && sent {
+			err = uncertain(err)
+		}
+	}()
 	if len(o.Targets) != 1 || o.Targets[0].Kind != "agent" || o.Targets[0].Value != b.settings.Agent {
 		return "", errors.New("host: exactly one agent target matching settings.agent is required")
 	}
@@ -82,29 +92,40 @@ func (b *Backend) execute(ctx context.Context, o proto.Order) (string, error) {
 		}
 		b.mu.Lock()
 		defer b.mu.Unlock()
-		return b.changePorts(ctx, ports, o.Action == "block-port", ttl)
+		return b.journalPorts(ctx, o, ports, ttl)
 	case "stop-service", "start-service":
 		unit, ok := o.Params["unit"].(string)
 		if !ok || !b.services[unit] {
 			return "", errors.New("host: unit is not in services allowlist")
 		}
+		b.mu.Lock()
+		defer b.mu.Unlock()
 		action, want := "stop", "inactive"
 		if o.Action == "start-service" {
 			action, want = "start", "active"
-		}
-		if _, err := b.command(ctx, b.settings.Systemctl, []string{action, unit}, ""); err != nil {
-			return "", err
-		}
-		out, err := b.command(ctx, b.settings.Systemctl, []string{"is-active", unit}, "")
-		// systemctl is-active returns 3 for a known inactive service. Other
-		// errors (including a missing unit, exit 4) must never verify a stop.
-		var exit interface{ ExitCode() int }
-		inactive := want == "inactive" && errors.As(err, &exit) && exit.ExitCode() == 3
-		if strings.TrimSpace(string(out)) != want || (err != nil && !inactive) {
-			if err != nil {
-				return "", fmt.Errorf("host: service verification failed: %w", err)
+			if prior, ok := b.journal.Get(o.RevertOf, b.name, unit, "stop-service"); ok && !prior.Prior {
+				return "service was inactive; left stopped", nil
 			}
-			return "", errors.New("host: service verification failed: unexpected state")
+		} else {
+			out, e := b.command(ctx, b.settings.Systemctl, []string{"is-active", unit}, "")
+			var exit interface{ ExitCode() int }
+			active := strings.TrimSpace(string(out)) == "active" && e == nil
+			inactive := strings.TrimSpace(string(out)) == "inactive" && errors.As(e, &exit) && exit.ExitCode() == 3
+			if !active && !inactive {
+				return "", errors.New("host: cannot determine prior service state")
+			}
+			if e = b.journal.Put(o.ID, actor.JournalEntry{Backend: b.name, Target: unit, Action: o.Action, Expires: actor.OrderExpiry(o.TTL, o.NotAfter), Prior: active}); e != nil {
+				return "", e
+			}
+		}
+		if _, e := b.command(ctx, b.settings.Systemctl, []string{action, unit}, ""); e != nil {
+			return "", e
+		}
+		out, e := b.command(ctx, b.settings.Systemctl, []string{"is-active", unit}, "")
+		var exit interface{ ExitCode() int }
+		inactive := want == "inactive" && errors.As(e, &exit) && exit.ExitCode() == 3
+		if strings.TrimSpace(string(out)) != want || (e != nil && !inactive) {
+			return "", errors.New("host: service verification failed")
 		}
 		return unit + " " + want + "; verified", nil
 	default:
@@ -117,11 +138,11 @@ func (b *Backend) script(ctx context.Context, script string) error {
 	return err
 }
 
-func (b *Backend) changePorts(ctx context.Context, ports []port, block bool, ttl int64) (string, error) {
+func (b *Backend) changePorts(ctx context.Context, ports []port, block bool, expiry time.Time) (string, error) {
 	t := b.settings.Table
 	// Also ensure empty sets for recovery. An expired/deleted element can
 	// then be verified absent without interpreting localized ENOENT text.
-	structure := fmt.Sprintf("add table inet %s\nadd set inet %s blocked_tcp { type inet_service; flags timeout; }\nadd set inet %s blocked_udp { type inet_service; flags timeout; }\nadd chain inet %s input { type filter hook input priority -10; policy accept; }\n", t, t, t, t)
+	structure := fmt.Sprintf("add table inet %s\nadd set inet %s blocked_tcp { type inet_service; flags timeout; }\nadd set inet %s blocked_udp { type inet_service; flags timeout; }\nadd chain inet %s input { type filter hook input priority -10; policy accept; }\nadd chain inet %s prerouting { type filter hook prerouting priority -150; policy accept; }\n", t, t, t, t, t)
 	if err := b.script(ctx, structure); err != nil {
 		return "", err
 	}
@@ -130,6 +151,21 @@ func (b *Backend) changePorts(ctx context.Context, ports []port, block bool, ttl
 			return "", err
 		}
 		var script strings.Builder
+		for _, p := range ports {
+			exists, e := b.portExists(ctx, p)
+			if e != nil {
+				return "", e
+			}
+			if exists {
+				fmt.Fprintf(&script, "delete element inet %s blocked_%s { %d }\n", t, p.proto, p.number)
+			}
+		}
+		// nft accepts relative timeouts. Compute the remaining lifetime after
+		// discovery so command setup (and preceding ports) cannot extend a holder.
+		ttl := int64(math.Ceil(time.Until(expiry).Seconds()))
+		if ttl <= 0 {
+			return "", errors.New("host: port holder expired before update")
+		}
 		for _, p := range ports {
 			fmt.Fprintf(&script, "add element inet %s blocked_%s { %d timeout %ds }\n", t, p.proto, p.number, ttl)
 		}
@@ -164,4 +200,56 @@ func (b *Backend) changePorts(ctx context.Context, ports []port, block bool, ttl
 		state = "blocked"
 	}
 	return "ports " + state + "; verified", nil
+}
+
+func (b *Backend) journalPorts(ctx context.Context, o proto.Order, ports []port, ttl int64) (string, error) {
+	now := time.Now()
+	if o.Action == "block-port" {
+		values := []string{}
+		for _, p := range ports {
+			values = append(values, strconv.Itoa(p.number)+"/"+p.proto)
+		}
+		if err := b.journal.Put(o.ID, actor.JournalEntry{Backend: b.name, Target: b.settings.Agent, Action: o.Action, Expires: now.Add(time.Duration(ttl) * time.Second), Ports: values}); err != nil {
+			return "", err
+		}
+	} else {
+		prior, ok := b.journal.Get(o.RevertOf, b.name, b.settings.Agent, "block-port")
+		if ok {
+			prior.Released = true
+			if err := b.journal.Put(o.RevertOf, prior); err != nil {
+				return "", err
+			}
+		}
+	}
+	held := false
+	for _, p := range ports {
+		latest := time.Time{}
+		for _, entry := range b.journal.Entries() {
+			if entry.Backend != b.name || entry.Target != b.settings.Agent || entry.Action != "block-port" || entry.Released || !entry.Expires.After(now) {
+				continue
+			}
+			for _, value := range entry.Ports {
+				if value == strconv.Itoa(p.number)+"/"+p.proto && entry.Expires.After(latest) {
+					latest = entry.Expires
+				}
+			}
+		}
+		block := o.Action == "block-port" || !latest.IsZero()
+		if latest.IsZero() && block {
+			latest = now.Add(time.Duration(ttl) * time.Second)
+		}
+		if block && o.Action == "unblock-port" {
+			held = true
+		}
+		if _, err := b.changePorts(ctx, []port{p}, block, latest); err != nil {
+			return "", err
+		}
+	}
+	if held {
+		return "ports retained for other active orders; verified", nil
+	}
+	if o.Action == "block-port" {
+		return "ports blocked; verified", nil
+	}
+	return "ports unblocked; verified", nil
 }

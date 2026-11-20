@@ -23,7 +23,7 @@
         "nft": "/usr/sbin/nft",
         "table": "netnoodle",
         "max_ttl": "24h",
-        "never_block_ports": [22],
+        "never_block_ports": [22, 7444],
         "services": [],
         "systemctl": "/usr/bin/systemctl"
       }
