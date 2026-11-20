@@ -1,0 +1,36 @@
+{
+  "credentials": "/etc/nn-actor/credentials.json",
+  "nonce_file": "/var/lib/nn-actor/nonces.json",
+  "dry_run": true,
+  "max_per_hour": 20,
+  "backends": [
+    {
+      "type": "documentation",
+      "name": "Host permissions (documentation only)",
+      "disabled": true,
+      "settings": {
+        "identity": "agent must be this host's agent peer name, not its actor peer name. Replace web01 in settings and both allow targets together.",
+        "recommendation": "Use block-port/unblock-port only. nftables expires every block even if no revert order arrives.",
+        "services": "stop-service/start-service need root or an explicit polkit rule and are not covered by nn-actor-host.service. To enable them, list exact service units in services and allow both actions locally.",
+        "max_ttl": "A duration of at least 1s; fractional seconds are rounded down. TTL 0 uses max_ttl."
+      }
+    },
+    {
+      "type": "host",
+      "name": "host",
+      "settings": {
+        "agent": "web01",
+        "nft": "/usr/sbin/nft",
+        "table": "netnoodle",
+        "max_ttl": "24h",
+        "never_block_ports": [22],
+        "services": [],
+        "systemctl": "/usr/bin/systemctl"
+      }
+    }
+  ],
+  "allow": [
+    {"action": "block-port", "targets": ["agent=web01"]},
+    {"action": "unblock-port", "targets": ["agent=web01"]}
+  ]
+}

@@ -440,6 +440,12 @@ Backend `proxmox` (Proxmox VE guests, target `proxmox.guest`): refer to [deploy/
 - Make a separate API token for the actor with only the permissions `VM.Audit`, `VM.Config.Network` and (for snapshots) `VM.Snapshot`. Do not use the read-only token of the import.
 - Write the VM IDs that must never be isolated in `never_isolate`.
 
+Backend `host` (on the Linux host itself, target `agent=<name of the agent of this host>`): refer to [deploy/nn-actor.host.example.json](deploy/nn-actor.host.example.json) and [deploy/nn-actor-host.service](deploy/nn-actor-host.service).
+
+- `block-port` adds the ports to sets of its own nftables table `inet netnoodle` and drops incoming packets to them. Each entry has a time limit (the TTL of the order, at most `max_ttl`). Thus the block ends also if the revert order does not arrive. `unblock-port` removes the entries.
+- Port 22 is never blocked (setting `never_block_ports`), so that you can still log in.
+- `stop-service` and `start-service` are permitted only for the units in `services`. They need root or a polkit rule. The service unit in `deploy/` gives only `CAP_NET_ADMIN`, which is sufficient for `block-port`.
+
 When you approve a decision on the **Actions** page, the server sends an order to an actor that can do the action for the device. The **Actions** page shows the state of the order. After the TTL, the server sends the revert order.
 
 ## Map page

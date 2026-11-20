@@ -1,0 +1,44 @@
+# Linux host backend of nn-actor. Enroll with role actor before starting.
+# stop-service/start-service need root or a polkit rule; this unit's capability
+# does not authorize service control. Recommend block-port/unblock-port only.
+[Unit]
+Description=netnoodle host actor (nftables port blocks)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/nn-actor run -config /etc/nn-actor/host.json
+User=nn-actor
+Group=nn-actor
+WorkingDirectory=/var/lib/nn-actor
+StateDirectory=nn-actor
+StateDirectoryMode=0700
+UMask=0077
+Restart=on-failure
+RestartSec=60
+
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+ReadWritePaths=/var/lib/nn-actor
+
+[Install]
+WantedBy=multi-user.target

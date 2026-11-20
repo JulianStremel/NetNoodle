@@ -4,6 +4,7 @@
 package plugins
 
 import (
+	_ "github.com/JulianStremel/netnoodle/internal/actor/hostactor"
 	_ "github.com/JulianStremel/netnoodle/internal/actor/logactor"
 	_ "github.com/JulianStremel/netnoodle/internal/actor/pveactor"
 	_ "github.com/JulianStremel/netnoodle/internal/actor/unifiactor"
