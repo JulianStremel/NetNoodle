@@ -1,15 +1,29 @@
-# Keeps the pinned action SHAs and the dependencies current (weekly pull requests).
+# Dependabot opens pull requests when a dependency or a pinned action has a new
+# version. CI runs on each of them; merge the green ones.
+# Groups: crates that must change together (RustCrypto: sha2/hmac/digest) come in one
+# pull request, and minor/patch updates of each ecosystem are bundled to cut noise.
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: weekly }
+    groups:
+      actions:
+        patterns: ["*"]
   - package-ecosystem: gomod
     directory: /
     schedule: { interval: weekly }
+    groups:
+      go-minor-patch:
+        update-types: [minor, patch]
   - package-ecosystem: cargo
     directory: /agent
     schedule: { interval: weekly }
+    groups:
+      rustcrypto:
+        patterns: ["sha2", "hmac", "digest", "sha1", "crypto-common"]
+      cargo-minor-patch:
+        update-types: [minor, patch]
   - package-ecosystem: docker
     directory: /
     schedule: { interval: weekly }

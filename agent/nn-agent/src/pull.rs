@@ -1,7 +1,7 @@
 //! Pull-mode pairing and a sequential, certificate-pinned HTTPS listener.
 
 use crate::{client, collector::Collector, config::Config, report};
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use rustls::client::danger::HandshakeSignatureValid;
 use rustls::crypto::{verify_tls12_signature, verify_tls13_signature, CryptoProvider};
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer, UnixTime};
