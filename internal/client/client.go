@@ -13,9 +13,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
+	"github.com/JulianStremel/netnoodle/internal/orders"
 	"github.com/JulianStremel/netnoodle/internal/proto"
 	"github.com/JulianStremel/netnoodle/internal/tlspin"
 	"github.com/JulianStremel/netnoodle/internal/version"
@@ -74,17 +76,25 @@ func Enroll(ctx context.Context, server, fingerprint, joinToken, name string) (C
 	return Credentials{Server: c.creds.Server, Fingerprint: fingerprint, Name: resp.Name, Role: resp.Role, Token: resp.Token, OrderKey: resp.OrderKey}, nil
 }
 
-// SaveCredentials writes credentials to a file only the owner can read.
+// SaveCredentials writes credentials to a file only the owner can read:
+// a new private file (0600 before any byte is written) that replaces the
+// old one atomically. A symlink at path is replaced, not followed, and a
+// directory that other users can write is refused (security review
+// 2026-11-20).
 func SaveCredentials(path string, c Credentials) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
+	}
+	if runtime.GOOS != "windows" {
+		if i, err := os.Stat(dir); err != nil {
+			return err
+		} else if i.Mode().Perm()&0o022 != 0 {
+			return fmt.Errorf("%s: directory is writable by other users", dir)
+		}
 	}
 	b, _ := json.MarshalIndent(c, "", "  ")
-	if err := os.WriteFile(path, b, 0o600); err != nil {
-		return err
-	}
-	// WriteFile keeps the mode of an existing file; make sure it is private.
-	return os.Chmod(path, 0o600)
+	return orders.WriteFileDurable(path, b)
 }
 
 // LoadCredentials reads a credentials file.

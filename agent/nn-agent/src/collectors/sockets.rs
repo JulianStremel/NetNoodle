@@ -110,6 +110,22 @@ pub fn dedupe(socks: Vec<Sock>, eph: (u16, u16)) -> Vec<Sock> {
     best.into_values().collect()
 }
 
+/// Largest /proc/net table read, and most listening sockets kept. Many
+/// sockets (local users, load) must not make the agent use unbounded
+/// memory (security review 2026-11-20).
+const MAX_TABLE_BYTES: u64 = 64 << 20;
+const MAX_LISTENING: usize = 65536;
+
+/// Reads at most MAX_TABLE_BYTES of a /proc table.
+fn read_table(path: &std::path::Path) -> std::io::Result<String> {
+    use std::io::Read;
+    let mut s = String::new();
+    std::fs::File::open(path)?
+        .take(MAX_TABLE_BYTES)
+        .read_to_string(&mut s)?;
+    Ok(s)
+}
+
 /// All listening sockets from the /proc/net tables (before deduplication).
 pub fn listening(ctx: &Ctx) -> Result<Vec<Sock>, String> {
     let mut socks = Vec::new();
@@ -120,9 +136,10 @@ pub fn listening(ctx: &Ctx) -> Result<Vec<Sock>, String> {
         ("/proc/net/udp", "udp"),
         ("/proc/net/udp6", "udp"),
     ] {
-        if let Ok(s) = std::fs::read_to_string(ctx.path(file)) {
+        if let Ok(s) = read_table(&ctx.path(file)) {
             read_any = true;
             socks.extend(parse_table(&s, proto));
+            socks.truncate(MAX_LISTENING);
         }
     }
     if read_any {

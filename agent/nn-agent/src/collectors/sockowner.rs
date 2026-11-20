@@ -53,11 +53,21 @@ pub fn owner_of_pid(ctx: &Ctx, inode: u64, pid: u32) -> Owner {
 /// Step 1: maps socket inodes to process IDs through /proc/<pid>/fd links.
 /// Processes that the caller may not inspect are skipped.
 pub fn fd_owners(ctx: &Ctx) -> HashMap<u64, u32> {
+    // Bounded work: many processes or descriptors (local users, load) must
+    // not make one collection run unbounded (security review 2026-11-20).
+    const MAX_PIDS: usize = 65536;
+    const MAX_LINKS: usize = 2_000_000;
+    const MAX_TIME: std::time::Duration = std::time::Duration::from_secs(20);
+    let started = std::time::Instant::now();
+    let mut links = 0usize;
     let mut m = HashMap::new();
     let Ok(rd) = std::fs::read_dir(ctx.path("/proc")) else {
         return m;
     };
-    for e in rd.flatten() {
+    for e in rd.flatten().take(MAX_PIDS) {
+        if links >= MAX_LINKS || started.elapsed() > MAX_TIME {
+            break;
+        }
         let Ok(pid) = e.file_name().to_string_lossy().parse::<u32>() else {
             continue;
         };
@@ -65,6 +75,10 @@ pub fn fd_owners(ctx: &Ctx) -> HashMap<u64, u32> {
             continue; // other users' processes: permission denied
         };
         for fd in fds.flatten() {
+            links += 1;
+            if links >= MAX_LINKS {
+                break;
+            }
             if let Ok(t) = std::fs::read_link(fd.path()) {
                 let t = t.to_string_lossy();
                 if let Some(n) = t.strip_prefix("socket:[").and_then(|r| r.strip_suffix(']')) {

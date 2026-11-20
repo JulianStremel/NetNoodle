@@ -21,8 +21,12 @@ type intelState struct {
 	mu        sync.Mutex
 	matchers  []intel.Matcher
 	enrichers []intel.Enricher
-	queue     chan int64
+	// queue holds each device at most once (pending). It has no fixed
+	// size, so no device is dropped (security review 2026-11-20: a full
+	// 4096 channel skipped high device IDs on every refresh).
+	queue     []int64
 	pending   map[int64]bool
+	wake      chan struct{}
 	kick      chan struct{}
 	feeds     map[string]*FeedStatus
 	lastMatch time.Time
@@ -47,8 +51,8 @@ type IntelStatus struct {
 
 func newIntelState() *intelState {
 	return &intelState{
-		queue:   make(chan int64, 4096),
 		pending: map[int64]bool{},
+		wake:    make(chan struct{}, 1),
 		kick:    make(chan struct{}, 1),
 		feeds:   map[string]*FeedStatus{},
 	}
@@ -96,13 +100,29 @@ func (s *Server) enqueueMatch(ids ...int64) {
 		if in.pending[id] {
 			continue
 		}
-		select {
-		case in.queue <- id:
-			in.pending[id] = true
-		default:
-			s.log.Warn("match queue full", "device", id)
-		}
+		in.queue = append(in.queue, id)
+		in.pending[id] = true
 	}
+	select {
+	case in.wake <- struct{}{}:
+	default:
+	}
+}
+
+// nextMatch takes the oldest queued device.
+func (in *intelState) nextMatch() (int64, bool) {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	if len(in.queue) == 0 {
+		return 0, false
+	}
+	id := in.queue[0]
+	in.queue = in.queue[1:]
+	if len(in.queue) == 0 {
+		in.queue = nil // release the backing array
+	}
+	delete(in.pending, id)
+	return id, true
 }
 
 func hasComponents(es []proto.Entity) bool {
@@ -178,26 +198,27 @@ func (s *Server) refreshFeeds(ctx context.Context) {
 }
 
 func (s *Server) matchWorker(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case id := <-s.intel.queue:
-			s.intel.mu.Lock()
-			delete(s.intel.pending, id)
-			s.intel.mu.Unlock()
-			err := s.MatchDevice(ctx, id)
-			s.intel.mu.Lock()
-			s.intel.lastMatch = s.now()
-			if err != nil {
-				s.intel.lastErr = err.Error()
-			} else {
-				s.intel.lastErr = ""
+	for ctx.Err() == nil {
+		id, ok := s.intel.nextMatch()
+		if !ok {
+			select {
+			case <-ctx.Done():
+				return
+			case <-s.intel.wake:
 			}
-			s.intel.mu.Unlock()
-			if err != nil && ctx.Err() == nil {
-				s.log.Warn("match", "device", id, "err", err)
-			}
+			continue
+		}
+		err := s.MatchDevice(ctx, id)
+		s.intel.mu.Lock()
+		s.intel.lastMatch = s.now()
+		if err != nil {
+			s.intel.lastErr = err.Error()
+		} else {
+			s.intel.lastErr = ""
+		}
+		s.intel.mu.Unlock()
+		if err != nil && ctx.Err() == nil {
+			s.log.Warn("match", "device", id, "err", err)
 		}
 	}
 }

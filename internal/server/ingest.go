@@ -40,6 +40,10 @@ const maxNewDeviceEvents = 20
 // Ingest applies one observation of a source and emits events for new
 // devices. It is used by in-process sources.
 func (s *Server) Ingest(ctx context.Context, obs proto.Observation, raw []byte) (inventory.Result, error) {
+	// The same entity limit as for peers (security review 2026-11-20).
+	if n := inventory.CountEntities(obs.Entities); n > inventory.MaxEntities {
+		return inventory.Result{}, fmt.Errorf("too many entities (%d, maximum %d)", n, inventory.MaxEntities)
+	}
 	inventory.StripAgentIDs(obs.Entities)
 	return s.ingestAs(ctx, obs, raw, "")
 }

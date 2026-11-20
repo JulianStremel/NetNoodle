@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -353,46 +354,69 @@ func (m *Matcher) lookup(ctx context.Context, uniq map[Query]bool) (map[Query][]
 	return out, nil
 }
 
-// batch runs one querybatch call and follows page tokens.
-func (m *Matcher) batch(ctx context.Context, qs []Query, tokens []string) ([][]idRef, error) {
-	req := struct {
-		Queries []batchQuery `json:"queries"`
-	}{}
-	for i, q := range qs {
-		var bq batchQuery
-		bq.Package.Name, bq.Package.Ecosystem, bq.Version = q.Name, q.Ecosystem, q.Version
-		if tokens != nil {
-			bq.PageToken = tokens[i]
-		}
-		req.Queries = append(req.Queries, bq)
-	}
-	var resp batchResp
-	if err := m.post(ctx, "/v1/querybatch", req, &resp); err != nil {
-		return nil, err
-	}
-	if len(resp.Results) != len(qs) {
-		return nil, fmt.Errorf("osv: %d results for %d queries", len(resp.Results), len(qs))
-	}
+// Paging limits of one querybatch (security review 2026-11-20: a custom
+// OSV server could send endless page tokens). Results above the limits are
+// cut, not dropped, so the found IDs are still used.
+const (
+	maxPages       = 20
+	maxIDsPerQuery = 2000
+)
+
+// batch runs querybatch calls and follows page tokens, iteratively and
+// bounded.
+func (m *Matcher) batch(ctx context.Context, qs []Query, _ []string) ([][]idRef, error) {
 	out := make([][]idRef, len(qs))
-	var more []Query
-	var moreTok []string
-	var moreIdx []int
-	for i, r := range resp.Results {
-		out[i] = r.Vulns
-		if r.NextPageToken != "" {
-			more = append(more, qs[i])
-			moreTok = append(moreTok, r.NextPageToken)
-			moreIdx = append(moreIdx, i)
-		}
+	idx := make([]int, len(qs))
+	for i := range idx {
+		idx[i] = i
 	}
-	if len(more) > 0 {
-		next, err := m.batch(ctx, more, moreTok)
-		if err != nil {
+	cur := qs
+	var tokens []string
+	seen := map[string]bool{}
+	for page := 0; len(cur) > 0; page++ {
+		if page >= maxPages {
+			slog.Warn("osv: result pages cut", "pages", maxPages, "queries", len(cur))
+			break
+		}
+		req := struct {
+			Queries []batchQuery `json:"queries"`
+		}{}
+		for i, q := range cur {
+			var bq batchQuery
+			bq.Package.Name, bq.Package.Ecosystem, bq.Version = q.Name, q.Ecosystem, q.Version
+			if tokens != nil {
+				bq.PageToken = tokens[i]
+			}
+			req.Queries = append(req.Queries, bq)
+		}
+		var resp batchResp
+		if err := m.post(ctx, "/v1/querybatch", req, &resp); err != nil {
 			return nil, err
 		}
-		for j, i := range moreIdx {
-			out[i] = append(out[i], next[j]...)
+		if len(resp.Results) != len(cur) {
+			return nil, fmt.Errorf("osv: %d results for %d queries", len(resp.Results), len(cur))
 		}
+		var next []Query
+		var nextTok []string
+		var nextIdx []int
+		for i, r := range resp.Results {
+			k := idx[i]
+			room := maxIDsPerQuery - len(out[k])
+			if len(r.Vulns) > room {
+				r.Vulns = r.Vulns[:max(room, 0)]
+				r.NextPageToken = ""
+				slog.Warn("osv: result IDs cut", "package", cur[i].Name, "max", maxIDsPerQuery)
+			}
+			out[k] = append(out[k], r.Vulns...)
+			if r.NextPageToken == "" || seen[r.NextPageToken] || len(r.NextPageToken) > 4096 {
+				continue
+			}
+			seen[r.NextPageToken] = true
+			next = append(next, cur[i])
+			nextTok = append(nextTok, r.NextPageToken)
+			nextIdx = append(nextIdx, k)
+		}
+		cur, tokens, idx = next, nextTok, nextIdx
 	}
 	return out, nil
 }

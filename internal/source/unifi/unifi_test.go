@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/JulianStremel/netnoodle/internal/proto"
@@ -107,3 +108,20 @@ func TestSelectSites(t *testing.T) {
 }
 
 func sha256sum(b []byte) [32]byte { return sha256.Sum256(b) }
+
+// TestOversizedPageRefused: a page with more records than asked for is
+// refused (security review 2026-11-20).
+func TestOversizedPageRefused(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		data := strings.TrimSuffix(strings.Repeat(`{"id":"s","name":"x"},`, pageSize+1), ",")
+		fmt.Fprintf(w, `{"offset":0,"limit":%d,"count":%d,"totalCount":%d,"data":[%s]}`, pageSize, pageSize+1, pageSize+1, data)
+	}))
+	defer srv.Close()
+	src, err := New("u", json.RawMessage(fmt.Sprintf(`{"url":%q,"api_key":"secret","fingerprint":%q}`, srv.URL, fingerprintOf(srv))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := all[site](context.Background(), src.(*Source), "/sites"); err == nil || !strings.Contains(err.Error(), "records") {
+		t.Fatal(err)
+	}
+}

@@ -119,11 +119,28 @@ fn http_agent(fingerprint: &str) -> Result<ureq::Agent, String> {
         .build())
 }
 
+/// Largest server answer the agent reads (security review 2026-11-20: a
+/// compromised server could stream an unbounded JSON value).
+const MAX_RESPONSE: u64 = 64 << 10;
+
+/// Reads a JSON answer of at most MAX_RESPONSE bytes.
+fn read_json<T: serde::de::DeserializeOwned>(resp: ureq::Response) -> Result<T, String> {
+    use std::io::Read;
+    let mut buf = Vec::new();
+    resp.into_reader()
+        .take(MAX_RESPONSE + 1)
+        .read_to_end(&mut buf)
+        .map_err(|e| e.to_string())?;
+    if buf.len() as u64 > MAX_RESPONSE {
+        return Err(format!("server answer larger than {MAX_RESPONSE} bytes"));
+    }
+    serde_json::from_slice(&buf).map_err(|e| e.to_string())
+}
+
 fn error_text(e: ureq::Error) -> String {
     match e {
         ureq::Error::Status(code, resp) => {
-            let msg = resp
-                .into_json::<serde_json::Value>()
+            let msg = read_json::<serde_json::Value>(resp)
                 .ok()
                 .and_then(|v| v.get("error").and_then(|m| m.as_str()).map(String::from))
                 .unwrap_or_default();
@@ -148,12 +165,12 @@ pub fn enroll(
     }
     let server = server.trim_end_matches('/').to_string();
     require_https(&server)?;
-    let r: Resp = http_agent(fingerprint)?
-        .post(&format!("{server}/v1/enroll"))
-        .send_json(serde_json::json!({"join_token": token, "name": name}))
-        .map_err(error_text)?
-        .into_json()
-        .map_err(|e| e.to_string())?;
+    let r: Resp = read_json(
+        http_agent(fingerprint)?
+            .post(&format!("{server}/v1/enroll"))
+            .send_json(serde_json::json!({"join_token": token, "name": name}))
+            .map_err(error_text)?,
+    )?;
     Ok(Credentials {
         server,
         fingerprint: fingerprint.to_string(),
@@ -177,38 +194,71 @@ fn require_https(server: &str) -> Result<(), String> {
 /// Sends an observation. Returns the server's summary.
 pub fn post_observation(c: &Credentials, obs: &Observation) -> Result<serde_json::Value, String> {
     require_https(&c.server)?;
-    http_agent(&c.fingerprint)?
-        .post(&format!("{}/v1/observations", c.server))
-        .set("Authorization", &format!("Bearer {}", c.token))
-        .send_json(obs)
-        .map_err(error_text)?
-        .into_json()
-        .map_err(|e| e.to_string())
+    read_json(
+        http_agent(&c.fingerprint)?
+            .post(&format!("{}/v1/observations", c.server))
+            .set("Authorization", &format!("Bearer {}", c.token))
+            .send_json(obs)
+            .map_err(error_text)?,
+    )
 }
 
-/// Writes credentials to a file that only the owner can read.
+/// Writes credentials to a file that only the owner can read: a new file
+/// (mode 0600 before any byte is written) replaces the old one atomically.
+/// A symlink at `path` is replaced, not followed, and a directory that other
+/// users can write is refused (security review 2026-11-20).
 pub fn save(path: &Path, c: &Credentials) -> Result<(), String> {
-    if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
-        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    }
     let data = serde_json::to_vec_pretty(c).map_err(|e| e.to_string())?;
+    write_private(path, &data)
+}
+
+/// Writes secret data to `path` as a new 0600 file that replaces the old
+/// one atomically (see `save`). Used for credentials and the pull state.
+pub fn write_private(path: &Path, data: &[u8]) -> Result<(), String> {
+    let dir = path
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(dir)
+            .map_err(|e| format!("{}: {e}", dir.display()))?
+            .permissions()
+            .mode();
+        if mode & 0o022 != 0 {
+            return Err(format!(
+                "{}: directory is writable by other users",
+                dir.display()
+            ));
+        }
+    }
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "credentials".into());
+    let tmp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
+    let _ = std::fs::remove_file(&tmp);
     let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
+    opts.write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
     use std::io::Write;
-    opts.open(path)
-        .and_then(|mut f| f.write_all(&data))
-        .map_err(|e| format!("{}: {e}", path.display()))?;
-    // `mode` applies only to new files; make an existing file private too.
+    let written = opts.open(&tmp).and_then(|mut f| {
+        f.write_all(data)?;
+        f.sync_all()
+    });
+    if let Err(e) = written.and_then(|_| std::fs::rename(&tmp, path)) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("{}: {e}", path.display()));
+    }
     #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-            .map_err(|e| format!("{}: {e}", path.display()))?;
+    if let Ok(d) = std::fs::File::open(dir) {
+        let _ = d.sync_all();
     }
     Ok(())
 }
@@ -238,5 +288,46 @@ mod tests {
             .collect();
         assert_eq!(parse_fingerprint(&colons.join(":")).unwrap(), a);
         assert!(parse_fingerprint("abc").is_err());
+    }
+
+    // Security review 2026-11-20: bounded answers, private atomic credentials.
+    #[test]
+    fn answers_are_bounded() {
+        let small = ureq::Response::new(200, "OK", r#"{"ok":true}"#).unwrap();
+        assert!(read_json::<serde_json::Value>(small).is_ok());
+        let big = format!(r#"{{"x":"{}"}}"#, "a".repeat(MAX_RESPONSE as usize));
+        let big = ureq::Response::new(200, "OK", &big).unwrap();
+        assert!(read_json::<serde_json::Value>(big).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_replaces_symlink_and_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("nn-agent-save-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let victim = dir.join("victim");
+        std::fs::write(&victim, "keep").unwrap();
+        let path = dir.join("creds.json");
+        std::os::unix::fs::symlink(&victim, &path).unwrap();
+        let c = Credentials {
+            server: "https://s".into(),
+            fingerprint: "f".into(),
+            name: "n".into(),
+            role: "agent".into(),
+            token: "secret".into(),
+        };
+        save(&path, &c).unwrap();
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep");
+        let m = std::fs::symlink_metadata(&path).unwrap();
+        assert!(!m.file_type().is_symlink());
+        assert_eq!(m.permissions().mode() & 0o777, 0o600);
+        let shared = dir.join("shared");
+        std::fs::create_dir_all(&shared).unwrap();
+        std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(save(&shared.join("c.json"), &c).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

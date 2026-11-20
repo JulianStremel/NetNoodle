@@ -33,6 +33,10 @@ RestrictRealtime=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
+# Bound the agent if a collection grows (many sockets, processes, packages).
+MemoryMax=512M
+TasksMax=64
+CPUQuota=50%
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 ReadWritePaths=/var/lib/nn-agent

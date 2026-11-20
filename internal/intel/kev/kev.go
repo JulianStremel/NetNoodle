@@ -15,8 +15,11 @@ import (
 	"github.com/JulianStremel/netnoodle/internal/tlspin"
 )
 
+// maxEntries bounds the catalog (about 1,500 entries in 2026).
+const maxEntries = 100000
+
 const defaultURL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
-const maxBodySize = 64 << 20
+const maxBodySize = 16 << 20 // the catalog is about 1.5 MB (security review 2026-11-20)
 
 func init() { intel.Enrichers.Register("kev", New) }
 
@@ -90,6 +93,9 @@ func (e *enricher) Refresh(ctx context.Context) error {
 	}
 	if len(catalog.Vulnerabilities) == 0 {
 		return fmt.Errorf("kev catalog has no entries")
+	}
+	if len(catalog.Vulnerabilities) > maxEntries {
+		return fmt.Errorf("kev catalog has more than %d entries", maxEntries)
 	}
 	data := make(map[string]entry, len(catalog.Vulnerabilities))
 	for _, item := range catalog.Vulnerabilities {

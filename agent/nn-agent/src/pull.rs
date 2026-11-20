@@ -126,29 +126,10 @@ impl State {
     }
 
     fn save(&self, path: &Path) -> Result<(), String> {
-        if let Some(dir) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-            std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        }
+        // New private file, atomic replace, no symlink following (security
+        // review 2026-11-20).
         let data = serde_json::to_vec_pretty(self).map_err(|e| e.to_string())?;
-        let mut opts = std::fs::OpenOptions::new();
-        opts.write(true).create(true).truncate(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
-        }
-        let mut file = opts
-            .open(path)
-            .map_err(|e| format!("{}: {e}", path.display()))?;
-        // Secure an existing file before writing the key to it, too.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            file.set_permissions(std::fs::Permissions::from_mode(0o600))
-                .map_err(|e| format!("{}: {e}", path.display()))?;
-        }
-        file.write_all(&data)
-            .map_err(|e| format!("{}: {e}", path.display()))
+        crate::client::write_private(path, &data)
     }
 
     fn agent_fingerprint(&self) -> Result<String, String> {

@@ -123,8 +123,13 @@ type client struct {
 	UplinkDeviceID string `json:"uplinkDeviceId"`
 }
 
+// Paging limits (security review 2026-11-20: a malicious controller could
+// send 500 pages of 32 MiB each). A page has at most pageSize records,
+// and one list at most maxItems.
 const pageSize = 200
 const maxPages = 500
+const maxItems = 20000
+const maxPageBytes = 4 << 20
 
 func (u *Source) get(ctx context.Context, path string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.base+path, nil)
@@ -138,9 +143,12 @@ func (u *Source) get(ctx context.Context, path string, out any) error {
 		return err
 	}
 	defer res.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(res.Body, 32<<20))
+	body, err := io.ReadAll(io.LimitReader(res.Body, maxPageBytes+1))
 	if err != nil {
 		return err
+	}
+	if len(body) > maxPageBytes {
+		return fmt.Errorf("GET %s: answer larger than %d bytes", path, maxPageBytes)
 	}
 	if res.StatusCode != http.StatusOK {
 		return fmt.Errorf("GET %s: %s", path, res.Status)
@@ -158,6 +166,12 @@ func all[T any](ctx context.Context, u *Source, path string) ([]T, error) {
 		}
 		if err := u.get(ctx, fmt.Sprintf("%s%soffset=%d&limit=%d", path, sep, off, pageSize), &p); err != nil {
 			return nil, err
+		}
+		if len(p.Data) > pageSize {
+			return nil, fmt.Errorf("%s: page has %d records, asked for %d", path, len(p.Data), pageSize)
+		}
+		if len(out)+len(p.Data) > maxItems {
+			return nil, fmt.Errorf("%s: more than %d records", path, maxItems)
 		}
 		out = append(out, p.Data...)
 		off += len(p.Data)

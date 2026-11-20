@@ -3,6 +3,7 @@ package osv
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -154,5 +155,24 @@ func TestMatchErrorIsReported(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("want error when OSV is down")
+	}
+}
+
+// TestEndlessPagesAreBounded: a server that always sends a new page token
+// is followed at most maxPages times (security review 2026-11-20).
+func TestEndlessPagesAreBounded(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := calls.Add(1)
+		fmt.Fprintf(w, `{"results":[{"vulns":[{"id":"V-%d"}],"next_page_token":"t%d"}]}`, n, n)
+	}))
+	defer srv.Close()
+	m, err := New("osv", json.RawMessage(`{"url":"`+srv.URL+`"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := m.(*Matcher).batch(context.Background(), []Query{{Ecosystem: "Debian:12", Name: "bash", Version: "1"}}, nil)
+	if err != nil || calls.Load() != maxPages || len(res[0]) != maxPages {
+		t.Fatalf("calls=%d ids=%d err=%v", calls.Load(), len(res[0]), err)
 	}
 }
