@@ -358,9 +358,12 @@ The **Map** page shows all devices in one view. Select a visualization at the to
 
 | View | What it shows |
 |---|---|
+| Constellation | Each network is a nebula and each device is a star. A Proxmox host and its guests look like a small solar system. A ring shows a known exploited vulnerability (KEV). |
 | Radar | The riskiest devices are near the center. Each sector is a network. Guests are near their host. |
 | City | Each network is a district and each device is a building. Height shows the number of packages, color shows the risk. A red beacon shows a known exploited vulnerability (KEV). |
 | Flow | The path from a vulnerability to the package, the exposed service, the device, the host and the network. |
+
+![City view](docs/img/map-city.jpg)
 
 Click a device to see its blast radius: its host, its guests and the other guests of the same host. A compromise of one of them can affect the others. Double-click a device to open its page.
 

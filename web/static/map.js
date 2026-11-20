@@ -3,7 +3,7 @@
 import { api, el, registerView } from "./app.js";
 import * as kit from "./map-kit.js";
 
-const VIZ = ["radar", "city", "flow"];
+const VIZ = ["constellation", "radar", "city", "flow"];
 const STORE = "nn.map.viz";
 
 function remember(id) {
