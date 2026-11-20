@@ -7,7 +7,7 @@ Status: `proposed` (made by Claude, not yet reviewed), `accepted` (confirmed by 
 |---|---|---|---|---|---|
 | D-001 | 2026-11-19 | Greenfield restart. Go server, Rust agent and host actor. Dependencies are used freely; `go.sum` and `Cargo.lock` are committed. | User request. | — | accepted |
 | D-002 | 2026-11-19 | Every pluggable part is an interface + generic `registry.Registry[T]`, selected by `{type,name,settings}` config entries. | User request: modular, generic interfaces so new actors etc. can be added later. | Hard-coded switch statements. | accepted |
-| D-003 | 2026-11-19 | Go module path is `netnoodle`. | Simple; no remote decided. Easy to rename later. | `github.com/<user>/netnoodle`. | open |
+| D-003 | 2026-11-20 | Go module path is `github.com/JulianStremel/netnoodle` (the future remote). | User named the remote. Was `netnoodle` until a remote was known. | — | decided (user) |
 | D-004 | 2026-11-19 | SQLite via `modernc.org/sqlite` (pure Go, no cgo). One open connection. | Single binary, works on Windows without a C compiler. One connection avoids `SQLITE_BUSY` on writes. | Postgres (more ops work), `mattn/go-sqlite3` (cgo). | proposed |
 | D-005 | 2026-11-19 | `modernc.org/sqlite` needs Go 1.26; `go.mod` says `go 1.26.0` and Go downloads the toolchain. | Required by the driver. | Older driver version. | proposed |
 | D-006 | 2026-11-19 | Web UI is plain HTML/CSS/JS ES modules embedded with `embed`, no build step. Pages register through `registerView`. | Fastest path to a working UI; nothing to install. | React/Svelte with a bundler. | proposed |

@@ -12,8 +12,8 @@ package decide
 import (
 	"context"
 
-	"netnoodle/internal/intel"
-	"netnoodle/internal/registry"
+	"github.com/JulianStremel/netnoodle/internal/intel"
+	"github.com/JulianStremel/netnoodle/internal/registry"
 )
 
 // Tier is the level of automation for a proposal.

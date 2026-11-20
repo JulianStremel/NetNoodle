@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"netnoodle/internal/intel"
-	"netnoodle/internal/proto"
-	"netnoodle/internal/store"
+	"github.com/JulianStremel/netnoodle/internal/intel"
+	"github.com/JulianStremel/netnoodle/internal/proto"
+	"github.com/JulianStremel/netnoodle/internal/store"
 )
 
 // DeviceComponents returns one component per PURL of the device.

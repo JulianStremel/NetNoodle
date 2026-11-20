@@ -3,7 +3,7 @@ package inventory
 import (
 	"errors"
 
-	"netnoodle/internal/proto"
+	"github.com/JulianStremel/netnoodle/internal/proto"
 )
 
 // MaxEntities is the largest number of entities (with all children) in one

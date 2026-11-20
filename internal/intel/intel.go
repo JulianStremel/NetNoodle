@@ -10,8 +10,8 @@ import (
 	"context"
 	"time"
 
-	"netnoodle/internal/proto"
-	"netnoodle/internal/registry"
+	"github.com/JulianStremel/netnoodle/internal/proto"
+	"github.com/JulianStremel/netnoodle/internal/registry"
 )
 
 // Vuln is one vulnerability in the server's normalized form.

@@ -16,13 +16,13 @@ import (
 	"syscall"
 	"time"
 
-	"netnoodle/internal/intel"
-	"netnoodle/internal/notify"
-	_ "netnoodle/internal/plugins" // built-in plug-ins
-	"netnoodle/internal/registry"
-	"netnoodle/internal/server"
-	"netnoodle/internal/store/sqlite"
-	"netnoodle/web"
+	"github.com/JulianStremel/netnoodle/internal/intel"
+	"github.com/JulianStremel/netnoodle/internal/notify"
+	_ "github.com/JulianStremel/netnoodle/internal/plugins" // built-in plug-ins
+	"github.com/JulianStremel/netnoodle/internal/registry"
+	"github.com/JulianStremel/netnoodle/internal/server"
+	"github.com/JulianStremel/netnoodle/internal/store/sqlite"
+	"github.com/JulianStremel/netnoodle/web"
 )
 
 func main() {

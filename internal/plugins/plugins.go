@@ -4,10 +4,10 @@
 package plugins
 
 import (
-	_ "netnoodle/internal/intel/epss"
-	_ "netnoodle/internal/intel/kev"
-	_ "netnoodle/internal/intel/osv"
-	_ "netnoodle/internal/notify/webhook"
-	_ "netnoodle/internal/source/proxmox"
-	_ "netnoodle/internal/source/unifi"
+	_ "github.com/JulianStremel/netnoodle/internal/intel/epss"
+	_ "github.com/JulianStremel/netnoodle/internal/intel/kev"
+	_ "github.com/JulianStremel/netnoodle/internal/intel/osv"
+	_ "github.com/JulianStremel/netnoodle/internal/notify/webhook"
+	_ "github.com/JulianStremel/netnoodle/internal/source/proxmox"
+	_ "github.com/JulianStremel/netnoodle/internal/source/unifi"
 )

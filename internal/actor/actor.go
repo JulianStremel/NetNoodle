@@ -8,8 +8,8 @@ package actor
 import (
 	"context"
 
-	"netnoodle/internal/proto"
-	"netnoodle/internal/registry"
+	"github.com/JulianStremel/netnoodle/internal/proto"
+	"github.com/JulianStremel/netnoodle/internal/registry"
 )
 
 // Backend executes verified orders. The nn-actor program checks the

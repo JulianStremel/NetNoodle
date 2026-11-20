@@ -10,10 +10,10 @@ import (
 	"strconv"
 	"strings"
 
-	"netnoodle/internal/inventory"
-	"netnoodle/internal/notify"
-	"netnoodle/internal/proto"
-	"netnoodle/internal/store"
+	"github.com/JulianStremel/netnoodle/internal/inventory"
+	"github.com/JulianStremel/netnoodle/internal/notify"
+	"github.com/JulianStremel/netnoodle/internal/proto"
+	"github.com/JulianStremel/netnoodle/internal/store"
 )
 
 // maxObservation is the largest observation body. An agent report of a

@@ -5,7 +5,7 @@ import (
 	"context"
 	"time"
 
-	"netnoodle/internal/registry"
+	"github.com/JulianStremel/netnoodle/internal/registry"
 )
 
 // Event is something a human should know about.

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"netnoodle/internal/store/sqlite"
+	"github.com/JulianStremel/netnoodle/internal/store/sqlite"
 )
 
 func newTestServer(t *testing.T) (*httptest.Server, *http.Client, string) {

@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"netnoodle/internal/notify"
+	"github.com/JulianStremel/netnoodle/internal/notify"
 )
 
 func TestWebhook(t *testing.T) {

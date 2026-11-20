@@ -1,4 +1,4 @@
-module netnoodle
+module github.com/JulianStremel/netnoodle
 
 go 1.26.0
 

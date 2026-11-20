@@ -6,11 +6,11 @@ import (
 	"strings"
 	"time"
 
-	"netnoodle/internal/notify"
-	"netnoodle/internal/proto"
-	"netnoodle/internal/registry"
-	"netnoodle/internal/source"
-	"netnoodle/internal/store"
+	"github.com/JulianStremel/netnoodle/internal/notify"
+	"github.com/JulianStremel/netnoodle/internal/proto"
+	"github.com/JulianStremel/netnoodle/internal/registry"
+	"github.com/JulianStremel/netnoodle/internal/source"
+	"github.com/JulianStremel/netnoodle/internal/store"
 )
 
 // SourceSpec is a source entry in the config: the common plug-in fields

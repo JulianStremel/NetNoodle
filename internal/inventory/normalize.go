@@ -8,7 +8,7 @@ import (
 	"strings"
 	"unicode"
 
-	"netnoodle/internal/proto"
+	"github.com/JulianStremel/netnoodle/internal/proto"
 )
 
 // Limits for one entity. Larger input is cut, not refused, so one bad

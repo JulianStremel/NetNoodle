@@ -3,7 +3,7 @@ package inventory
 import (
 	"testing"
 
-	"netnoodle/internal/proto"
+	"github.com/JulianStremel/netnoodle/internal/proto"
 )
 
 func TestNormalizeIdentifiers(t *testing.T) {

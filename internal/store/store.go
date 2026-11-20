@@ -7,9 +7,9 @@ import (
 	"errors"
 	"time"
 
-	"netnoodle/internal/intel"
-	"netnoodle/internal/inventory"
-	"netnoodle/internal/proto"
+	"github.com/JulianStremel/netnoodle/internal/intel"
+	"github.com/JulianStremel/netnoodle/internal/inventory"
+	"github.com/JulianStremel/netnoodle/internal/proto"
 )
 
 var (

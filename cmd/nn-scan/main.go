@@ -19,9 +19,9 @@ import (
 	"syscall"
 	"time"
 
-	"netnoodle/internal/client"
-	"netnoodle/internal/discovery/scan"
-	"netnoodle/internal/proto"
+	"github.com/JulianStremel/netnoodle/internal/client"
+	"github.com/JulianStremel/netnoodle/internal/discovery/scan"
+	"github.com/JulianStremel/netnoodle/internal/proto"
 )
 
 const defaultCreds = "nn-scan-creds.json"

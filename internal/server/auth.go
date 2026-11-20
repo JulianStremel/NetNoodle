@@ -13,7 +13,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
-	"netnoodle/internal/store"
+	"github.com/JulianStremel/netnoodle/internal/store"
 )
 
 const sessionCookie = "nn_session"

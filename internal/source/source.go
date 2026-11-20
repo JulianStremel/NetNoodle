@@ -8,8 +8,8 @@ package source
 import (
 	"context"
 
-	"netnoodle/internal/proto"
-	"netnoodle/internal/registry"
+	"github.com/JulianStremel/netnoodle/internal/proto"
+	"github.com/JulianStremel/netnoodle/internal/registry"
 )
 
 // Source produces observations. Poll is called once per poll interval and

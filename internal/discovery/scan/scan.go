@@ -20,7 +20,7 @@ import (
 	"sync"
 	"time"
 
-	"netnoodle/internal/proto"
+	"github.com/JulianStremel/netnoodle/internal/proto"
 )
 
 // DefaultPorts is a small list of common service ports.

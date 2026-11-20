@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"netnoodle/internal/proto"
+	"github.com/JulianStremel/netnoodle/internal/proto"
 )
 
 func TestQueryFor(t *testing.T) {

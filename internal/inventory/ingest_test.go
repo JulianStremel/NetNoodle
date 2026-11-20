@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"netnoodle/internal/inventory"
-	"netnoodle/internal/proto"
-	"netnoodle/internal/store/sqlite"
+	"github.com/JulianStremel/netnoodle/internal/inventory"
+	"github.com/JulianStremel/netnoodle/internal/proto"
+	"github.com/JulianStremel/netnoodle/internal/store/sqlite"
 )
 
 var t0 = time.Date(2026, 11, 19, 10, 0, 0, 0, time.UTC)

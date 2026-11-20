@@ -16,8 +16,8 @@ import (
 	"strings"
 	"time"
 
-	"netnoodle/internal/proto"
-	"netnoodle/internal/tlspin"
+	"github.com/JulianStremel/netnoodle/internal/proto"
+	"github.com/JulianStremel/netnoodle/internal/tlspin"
 )
 
 // Credentials is what a peer stores after enrollment.

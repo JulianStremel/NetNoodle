@@ -10,10 +10,10 @@ import (
 	"sync"
 	"time"
 
-	"netnoodle/internal/intel"
-	"netnoodle/internal/notify"
-	"netnoodle/internal/proto"
-	"netnoodle/internal/store"
+	"github.com/JulianStremel/netnoodle/internal/intel"
+	"github.com/JulianStremel/netnoodle/internal/notify"
+	"github.com/JulianStremel/netnoodle/internal/proto"
+	"github.com/JulianStremel/netnoodle/internal/store"
 )
 
 // intelState holds the threat-intelligence plug-ins and the match queue.

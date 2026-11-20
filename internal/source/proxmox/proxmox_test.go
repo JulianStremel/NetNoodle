@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"netnoodle/internal/inventory"
-	"netnoodle/internal/proto"
-	"netnoodle/internal/store/sqlite"
+	"github.com/JulianStremel/netnoodle/internal/inventory"
+	"github.com/JulianStremel/netnoodle/internal/proto"
+	"github.com/JulianStremel/netnoodle/internal/store/sqlite"
 )
 
 const token = "PVEAPIToken=nn@pve!audit=secret-uuid"

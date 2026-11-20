@@ -14,9 +14,9 @@ import (
 	"strings"
 	"time"
 
-	"netnoodle/internal/notify"
-	"netnoodle/internal/registry"
-	"netnoodle/internal/tlspin"
+	"github.com/JulianStremel/netnoodle/internal/notify"
+	"github.com/JulianStremel/netnoodle/internal/registry"
+	"github.com/JulianStremel/netnoodle/internal/tlspin"
 )
 
 func init() {

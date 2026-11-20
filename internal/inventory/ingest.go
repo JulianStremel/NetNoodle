@@ -16,7 +16,7 @@ import (
 	"sort"
 	"time"
 
-	"netnoodle/internal/proto"
+	"github.com/JulianStremel/netnoodle/internal/proto"
 )
 
 // Device is the data used to create or update a device record.

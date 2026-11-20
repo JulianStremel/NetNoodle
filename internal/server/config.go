@@ -8,7 +8,7 @@ import (
 	"os"
 	"time"
 
-	"netnoodle/internal/registry"
+	"github.com/JulianStremel/netnoodle/internal/registry"
 )
 
 // Config is the nn-server configuration file (JSON).

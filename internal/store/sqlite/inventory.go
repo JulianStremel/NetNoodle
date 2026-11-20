@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"netnoodle/internal/inventory"
-	"netnoodle/internal/proto"
-	"netnoodle/internal/store"
+	"github.com/JulianStremel/netnoodle/internal/inventory"
+	"github.com/JulianStremel/netnoodle/internal/proto"
+	"github.com/JulianStremel/netnoodle/internal/store"
 )
 
 var _ inventory.Store = (*DB)(nil)

@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"netnoodle/internal/intel"
+	"github.com/JulianStremel/netnoodle/internal/intel"
 )
 
 const testCSV = "#model_version:v2025.03.14,score_date:2026-11-19T00:00:00+0000\n" +

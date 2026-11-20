@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"netnoodle/internal/intel"
+	"github.com/JulianStremel/netnoodle/internal/intel"
 )
 
 const testCatalog = `{"catalogVersion":"2026.11.19","vulnerabilities":[

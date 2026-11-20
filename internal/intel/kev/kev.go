@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"netnoodle/internal/intel"
-	"netnoodle/internal/registry"
-	"netnoodle/internal/tlspin"
+	"github.com/JulianStremel/netnoodle/internal/intel"
+	"github.com/JulianStremel/netnoodle/internal/registry"
+	"github.com/JulianStremel/netnoodle/internal/tlspin"
 )
 
 const defaultURL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"

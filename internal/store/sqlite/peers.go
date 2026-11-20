@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"netnoodle/internal/store"
+	"github.com/JulianStremel/netnoodle/internal/store"
 )
 
 func (s *DB) CreateJoinToken(ctx context.Context, hash []byte, role, name string, uses int, expires time.Time) (int64, error) {

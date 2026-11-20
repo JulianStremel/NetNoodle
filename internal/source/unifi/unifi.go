@@ -26,10 +26,10 @@ import (
 	"strings"
 	"time"
 
-	"netnoodle/internal/proto"
-	"netnoodle/internal/registry"
-	"netnoodle/internal/source"
-	"netnoodle/internal/tlspin"
+	"github.com/JulianStremel/netnoodle/internal/proto"
+	"github.com/JulianStremel/netnoodle/internal/registry"
+	"github.com/JulianStremel/netnoodle/internal/source"
+	"github.com/JulianStremel/netnoodle/internal/tlspin"
 )
 
 func init() {

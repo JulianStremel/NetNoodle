@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"testing"
 
-	"netnoodle/internal/proto"
+	"github.com/JulianStremel/netnoodle/internal/proto"
 )
 
 // fakeController serves a minimal Integration API with paging.

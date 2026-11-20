@@ -20,10 +20,10 @@ import (
 	"sync"
 	"time"
 
-	"netnoodle/internal/intel"
-	"netnoodle/internal/proto"
-	"netnoodle/internal/registry"
-	"netnoodle/internal/tlspin"
+	"github.com/JulianStremel/netnoodle/internal/intel"
+	"github.com/JulianStremel/netnoodle/internal/proto"
+	"github.com/JulianStremel/netnoodle/internal/registry"
+	"github.com/JulianStremel/netnoodle/internal/tlspin"
 )
 
 func init() { intel.Matchers.Register("osv", New) }

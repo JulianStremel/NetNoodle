@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"netnoodle/internal/notify"
-	"netnoodle/internal/store"
+	"github.com/JulianStremel/netnoodle/internal/notify"
+	"github.com/JulianStremel/netnoodle/internal/store"
 )
 
 // Server holds the HTTP handlers and their dependencies.

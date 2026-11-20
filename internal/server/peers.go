@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"netnoodle/internal/store"
+	"github.com/JulianStremel/netnoodle/internal/store"
 )
 
 const peerKey ctxKey = 2

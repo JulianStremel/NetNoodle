@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"netnoodle/internal/store"
+	"github.com/JulianStremel/netnoodle/internal/store"
 )
 
 func open(t *testing.T) *DB {

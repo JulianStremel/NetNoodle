@@ -15,7 +15,7 @@ import (
 
 	_ "modernc.org/sqlite" // driver "sqlite"
 
-	"netnoodle/internal/store"
+	"github.com/JulianStremel/netnoodle/internal/store"
 )
 
 //go:embed migrations/*.sql

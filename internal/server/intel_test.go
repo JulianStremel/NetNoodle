@@ -13,11 +13,11 @@ import (
 	"testing/fstest"
 	"time"
 
-	"netnoodle/internal/intel"
-	"netnoodle/internal/inventory"
-	"netnoodle/internal/proto"
-	"netnoodle/internal/store"
-	"netnoodle/internal/store/sqlite"
+	"github.com/JulianStremel/netnoodle/internal/intel"
+	"github.com/JulianStremel/netnoodle/internal/inventory"
+	"github.com/JulianStremel/netnoodle/internal/proto"
+	"github.com/JulianStremel/netnoodle/internal/store"
+	"github.com/JulianStremel/netnoodle/internal/store/sqlite"
 )
 
 // fakeMatcher reports vulns for packages by name.
