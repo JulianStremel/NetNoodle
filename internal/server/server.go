@@ -32,6 +32,7 @@ type Server struct {
 	decide      *decideState
 	intel       *intelState
 	pull        *pullState
+	orders      *orderState
 	now         func() time.Time
 }
 
@@ -52,6 +53,7 @@ func New(cfg Config, st store.Store, ui fs.FS, fingerprint string, log *slog.Log
 		intel:       newIntelState(),
 		decide:      newDecideState(),
 		pull:        newPullState(),
+		orders:      newOrderState(),
 		now:         time.Now,
 	}
 }
@@ -64,6 +66,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/health", s.handleHealth)
 	mux.HandleFunc("POST /v1/enroll", s.handleEnroll)
 	mux.HandleFunc("POST /v1/observations", s.requirePeer(s.handleObservations, store.RoleSource, store.RoleAgent))
+	mux.HandleFunc("POST /v1/actor/hello", s.requirePeer(s.handleActorHello, store.RoleActor))
+	mux.HandleFunc("GET /v1/orders", s.requirePeer(s.handleActorOrders, store.RoleActor))
+	mux.HandleFunc("POST /v1/orders/result", s.requirePeer(s.handleOrderResult, store.RoleActor))
+	mux.HandleFunc("GET /api/orders", requireUser(s.handleOrders))
+	mux.HandleFunc("GET /api/actors", requireUser(s.handleActors))
+	mux.HandleFunc("POST /api/orders/{id}/revert", requireUser(s.handleRevertOrder))
 
 	// Operator API for the web UI.
 	mux.HandleFunc("POST /api/login", s.handleLogin)
@@ -157,6 +165,11 @@ func bodyLimits(next http.Handler) http.Handler {
 		if r.Method == http.MethodPost && r.URL.Path == "/v1/observations" {
 			limit, deadline = maxObservation, 5*time.Minute
 		}
+		// The order long poll waits up to 30 s; the read deadline also
+		// cancels the request context, so it must be longer.
+		if r.Method == http.MethodGet && r.URL.Path == "/v1/orders" {
+			deadline = time.Minute
+		}
 		_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(deadline))
 		r.Body = http.MaxBytesReader(w, r.Body, limit)
 		next.ServeHTTP(w, r)
@@ -249,9 +262,12 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
+	key, fp := s.orderKeyInfo()
 	writeJSON(w, http.StatusOK, map[string]string{
-		"protocol":        "v1",
-		"tls_fingerprint": s.fingerprint,
+		"order_key":             key,
+		"order_key_fingerprint": fp,
+		"protocol":              "v1",
+		"tls_fingerprint":       s.fingerprint,
 	})
 }
 

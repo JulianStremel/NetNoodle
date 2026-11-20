@@ -148,6 +148,9 @@ func (s *Server) evaluateSituation(ctx context.Context, ds []decide.Decider, gs 
 	if fresh && (saved.State == "pending" || saved.State == "notify") {
 		batch.add(saved)
 	}
+	if saved.State == "auto" {
+		s.kickPlanner()
+	}
 	return nil
 }
 

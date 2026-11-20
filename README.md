@@ -409,6 +409,26 @@ To change the rules, set `deciders` in `netnoodle.json`, for example:
 ] } } ] }
 ```
 
+## Procedure: install an actor (dry run)
+
+An actor executes approved actions. In this version, `nn-actor` has only the `log` backend: it writes what it would do. Refer to [docs/design/actors.md](docs/design/actors.md).
+
+1. In the web interface, make a join token with the role `actor`.
+2. Enroll the actor:
+
+   ```sh
+   NN_JOIN_TOKEN=<token> nn-actor enroll -server https://<server>:7443 -fingerprint <sha256> -name actor1 -creds /var/lib/nn-actor/creds.json
+   ```
+
+   The actor stores the public order key of the server. It accepts only orders with a signature of this key.
+3. Write the configuration. Refer to [deploy/nn-actor.example.json](deploy/nn-actor.example.json):
+   - `dry_run` is `true` if you do not write it. In dry-run mode the actor executes nothing.
+   - `allow` lists the permitted actions and targets (for example `mac=bc:24:11:*`). The actor refuses all other orders.
+   - `max_per_hour` limits the orders (default 20).
+4. Start the actor: `nn-actor run -config /etc/nn-actor/actor.json`.
+
+When you approve a decision on the **Actions** page, the server sends an order to an actor that can do the action for the device. The **Actions** page shows the state of the order. After the TTL, the server sends the revert order.
+
 ## Map page
 
 The **Map** page shows all devices in one view. Select a visualization at the top:

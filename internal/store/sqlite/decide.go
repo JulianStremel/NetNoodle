@@ -109,21 +109,19 @@ func (s *DB) UpsertProposal(ctx context.Context, p store.Proposal) (store.Propos
 	}
 	defer tx.Rollback()
 	// This lookup and write share a transaction. The partial index also enforces it.
-	old, e := scanProposal(tx.QueryRowContext(ctx, proposalSelect+` WHERE p.device_id=? AND p.vuln_id=? AND p.action=? AND p.state NOT IN ('approved','rejected') ORDER BY p.updated_at DESC,p.id DESC LIMIT 1`, p.DeviceID, p.VulnID, p.Action))
+	// Reviewed and executed scopes are immutable during finding re-evaluation.
+	locked, err := scanProposal(tx.QueryRowContext(ctx, proposalSelect+` WHERE p.device_id=? AND p.vuln_id=? AND p.action=? AND p.state IN ('approved','ordered','done','failed','no-actor','reverted') ORDER BY p.id DESC LIMIT 1`, p.DeviceID, p.VulnID, p.Action))
+	if err == nil {
+		return locked, false, nil
+	}
+	if !errors.Is(err, store.ErrNotFound) {
+		return p, false, err
+	}
+	old, e := scanProposal(tx.QueryRowContext(ctx, proposalSelect+` WHERE p.device_id=? AND p.vuln_id=? AND p.action=? AND p.state NOT IN ('approved','rejected','ordered','done','failed','no-actor','reverted') AND NOT EXISTS(SELECT 1 FROM orders WHERE proposal_id=p.id) ORDER BY p.updated_at DESC,p.id DESC LIMIT 1`, p.DeviceID, p.VulnID, p.Action))
 	if e != nil && !errors.Is(e, store.ErrNotFound) {
 		return p, false, e
 	}
 	fresh := errors.Is(e, store.ErrNotFound)
-	if fresh {
-		// Existing approvals retain their reviewed scope until M6 handles reverts.
-		approved, err := scanProposal(tx.QueryRowContext(ctx, proposalSelect+` WHERE p.device_id=? AND p.vuln_id=? AND p.action=? AND p.state='approved' ORDER BY p.id DESC LIMIT 1`, p.DeviceID, p.VulnID, p.Action))
-		if err == nil {
-			return approved, false, nil
-		}
-		if !errors.Is(err, store.ErrNotFound) {
-			return p, false, err
-		}
-	}
 	if p.State != "pending" && p.State != "auto" && p.State != "notify" {
 		return p, false, fmt.Errorf("invalid proposal state")
 	}
@@ -247,7 +245,7 @@ func (s *DB) ResolveProposals(ctx context.Context, id int64, open []string) erro
 			return e
 		}
 	}
-	_, e = tx.ExecContext(ctx, `UPDATE proposals SET state='resolved',updated_at=? WHERE device_id=? AND state IN ('notify','pending','auto') AND vuln_id NOT IN (SELECT id FROM decide_open_vulns)`, ts(time.Now()), id)
+	_, e = tx.ExecContext(ctx, `UPDATE proposals SET state='resolved',updated_at=? WHERE device_id=? AND state IN ('notify','pending','auto','ordered','done','no-actor') AND vuln_id NOT IN (SELECT id FROM decide_open_vulns)`, ts(time.Now()), id)
 	if e != nil {
 		return e
 	}
@@ -274,7 +272,7 @@ func (s *DB) ProposalStats(ctx context.Context) (map[string]int, error) {
 
 // PurgeProposals retains active proposals and recently updated history.
 func (s *DB) PurgeProposals(ctx context.Context, before time.Time) error {
-	_, e := s.db.ExecContext(ctx, `DELETE FROM proposals WHERE state IN ('approved','rejected','resolved','expired','notify') AND updated_at<?`, ts(before))
+	_, e := s.db.ExecContext(ctx, `DELETE FROM proposals WHERE state IN ('approved','rejected','resolved','expired','notify') AND updated_at<? AND NOT EXISTS(SELECT 1 FROM orders WHERE proposal_id=proposals.id)`, ts(before))
 	return e
 }
 

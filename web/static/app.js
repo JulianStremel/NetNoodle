@@ -76,6 +76,7 @@ export { ago };
 
 async function overview(root) {
   const o = await api("/api/overview");
+  const info = await api("/api/info");
   const f = o.findings;
   const stat = (n, label, cls, href) =>
     el("a", { class: `card stat ${cls || ""}`, href: href || "#/findings" }, el("div", { class: "n" }, String(n)), el("div", { class: "l" }, label));
@@ -118,7 +119,11 @@ async function overview(root) {
         ]),
     el("div", { class: "card" }, el("h2", {}, "Server"),
       el("p", { class: "muted small" }, "TLS fingerprint. Pin it in agents, scanners and actors:"),
-      el("p", { class: "mono" }, o.tls_fingerprint))));
+      el("p", { class: "mono" }, o.tls_fingerprint),
+      el("p", { class: "muted small" }, "Order signing public key (Ed25519):"),
+      el("p", { class: "mono" }, info.order_key),
+      el("p", { class: "muted small" }, "Order key SHA-256 fingerprint:"),
+      el("p", { class: "mono" }, info.order_key_fingerprint))));
 
   root.append(el("div", { class: "card" }, el("h2", {}, "Recent events"),
     o.events.length === 0 ? el("p", { class: "muted" }, "No events.") :

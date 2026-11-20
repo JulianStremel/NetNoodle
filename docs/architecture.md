@@ -197,5 +197,5 @@ The Go types are in `internal/proto`. The Rust types are in `agent/nn-proto`.
 | M3 | OSV, KEV and EPSS, findings page | Done |
 | M4 | `proxmox` source, `containers` collector, device tree, Map page, pull mode, MSRC matcher | Done. `qga` dropped: virtual machines run their own agent (D-050) |
 | M5 | `rules` decider, guards, approval queue, webhook notifier, device tags | Done (decisions are recorded; execution in M6) |
-| M6 | Actor protocol, signed orders, `nn-actor`, `nn-actor-host`, time limits | Not done |
+| M6 | Actor protocol, signed orders, `nn-actor`, `nn-actor-host`, time limits | In progress: signed orders, planner, revert, `nn-actor` with `log` backend (dry run) done |
 | M7 | `llm` decider | Not done |

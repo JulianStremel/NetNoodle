@@ -36,6 +36,7 @@ const sample = state => ({ id: 1, state, device_id: 1, decided_by: [], reason: '
 async function api(path) {
   requests.push(path);
   if (path === '/api/decide/settings') return { killswitch: false, rules: [], guards: [], stats: { pending: 900, auto: 800, notify: 700 } };
+  if (path === '/api/orders?limit=20000' || path === '/api/actors') return [];
   const u = new URL(path, 'http://test');
   assert.equal(u.pathname, '/api/proposals');
   assert.equal(u.searchParams.get('limit'), '500');
@@ -51,7 +52,7 @@ new Function('api', 'el', 'table', 'fmtTime', 'registerView', 'ago', 'vulnCell',
   await page(root);
   assert.ok(requests.includes('/api/proposals?state=pending&limit=500'));
   assert.ok(requests.includes('/api/proposals?state=auto&limit=500'));
-  assert.ok(requests.includes('/api/proposals?state=approved,rejected,expired,resolved,notify&limit=500'));
+  assert.ok(requests.includes('/api/proposals?state=approved,ordered,done,failed,no-actor,reverted,rejected,expired,resolved,notify&limit=500'));
   assert.equal(root.children[2].children[1].rows[0].state, 'pending');
   assert.equal(root.children[3].children[1].rows[0].state, 'auto');
   const strings = n => typeof n === 'string' ? n : (n?.children || []).map(strings).join(' ');

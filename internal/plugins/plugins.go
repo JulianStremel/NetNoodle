@@ -4,6 +4,7 @@
 package plugins
 
 import (
+	_ "github.com/JulianStremel/netnoodle/internal/actor/logactor"
 	_ "github.com/JulianStremel/netnoodle/internal/decide/guards"
 	_ "github.com/JulianStremel/netnoodle/internal/decide/rules"
 	_ "github.com/JulianStremel/netnoodle/internal/intel/epss"

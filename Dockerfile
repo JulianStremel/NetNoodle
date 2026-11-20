@@ -13,7 +13,8 @@ RUN go mod download
 COPY . .
 RUN go build -trimpath -ldflags "-s -w" -o /out/nn-server ./cmd/nn-server \
  && go build -trimpath -ldflags "-s -w" -o /out/nn-scan ./cmd/nn-scan \
- && mkdir -p /out/var/lib/netnoodle/data /out/var/lib/nn-scan
+ && go build -trimpath -ldflags "-s -w" -o /out/nn-actor ./cmd/nn-actor \
+ && mkdir -p /out/var/lib/netnoodle/data /out/var/lib/nn-scan /out/var/lib/nn-actor
 
 # nn-server: web UI and API on 7443. Data (database, TLS key) in /var/lib/netnoodle/data.
 FROM gcr.io/distroless/static-debian12:nonroot AS server
@@ -33,6 +34,14 @@ WORKDIR /var/lib/nn-scan
 VOLUME /var/lib/nn-scan
 ENTRYPOINT ["/usr/local/bin/nn-scan"]
 CMD ["run", "-config", "/etc/netnoodle/nn-scan.json"]
+
+FROM gcr.io/distroless/static-debian12:nonroot AS actor
+COPY --from=build --chown=65532:65532 /out/var/lib/nn-actor /var/lib/nn-actor
+COPY --from=build /out/nn-actor /usr/local/bin/nn-actor
+WORKDIR /var/lib/nn-actor
+VOLUME /var/lib/nn-actor
+ENTRYPOINT ["/usr/local/bin/nn-actor"]
+CMD ["run", "-config", "/etc/netnoodle/nn-actor.json"]
 
 # nn-agent and nn-agent-helper: static Linux binaries (musl).
 # Export them with --output; this is not a service image.

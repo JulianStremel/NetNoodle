@@ -14,7 +14,7 @@ go vet ./...
 echo "== go: test"
 go test ./...
 
-echo "== go: build"
+echo "== go: build (including nn-actor)"
 mkdir -p bin
 exe=$(go env GOEXE)
 for d in cmd/*/; do

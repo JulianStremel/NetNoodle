@@ -27,6 +27,7 @@ type Credentials struct {
 	Name        string `json:"name"`
 	Role        string `json:"role"`
 	Token       string `json:"token"`
+	OrderKey    string `json:"order_key,omitempty"`
 }
 
 // Client talks to nn-server.
@@ -61,14 +62,15 @@ func Enroll(ctx context.Context, server, fingerprint, joinToken, name string) (C
 		return Credentials{}, err
 	}
 	var resp struct {
-		Name  string `json:"name"`
-		Role  string `json:"role"`
-		Token string `json:"token"`
+		Name     string `json:"name"`
+		Role     string `json:"role"`
+		Token    string `json:"token"`
+		OrderKey string `json:"order_key"`
 	}
 	if err := c.do(ctx, http.MethodPost, "/v1/enroll", map[string]string{"join_token": joinToken, "name": name}, &resp); err != nil {
 		return Credentials{}, err
 	}
-	return Credentials{Server: c.creds.Server, Fingerprint: fingerprint, Name: resp.Name, Role: resp.Role, Token: resp.Token}, nil
+	return Credentials{Server: c.creds.Server, Fingerprint: fingerprint, Name: resp.Name, Role: resp.Role, Token: resp.Token, OrderKey: resp.OrderKey}, nil
 }
 
 // SaveCredentials writes credentials to a file only the owner can read.

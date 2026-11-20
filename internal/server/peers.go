@@ -32,6 +32,12 @@ func (s *Server) requirePeer(next http.HandlerFunc, roles ...string) http.Handle
 			return
 		}
 		p, err := s.st.PeerByToken(r.Context(), HashToken(tok))
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			// A database or context error is not a bad token; do not make
+			// the peer think its credentials are invalid.
+			writeErr(w, http.StatusServiceUnavailable, "try again")
+			return
+		}
 		if err != nil || p.Disabled {
 			writeErr(w, http.StatusUnauthorized, "invalid token")
 			return
@@ -102,7 +108,11 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	}
 	s.enrollLim.release(ip)
 	s.event(r.Context(), "peer.enrolled", p.Name, "peer "+p.Name+" enrolled as "+p.Role+" from "+ip)
-	writeJSON(w, http.StatusOK, map[string]string{"name": p.Name, "role": p.Role, "token": tok})
+	answer := map[string]string{"name": p.Name, "role": p.Role, "token": tok}
+	if p.Role == store.RoleActor {
+		answer["order_key"], _ = s.orderKeyInfo()
+	}
+	writeJSON(w, http.StatusOK, answer)
 }
 
 // --- operator API for peers and join tokens ---

@@ -50,7 +50,7 @@ func (s *Server) handleProposals(w http.ResponseWriter, r *http.Request) {
 	if f.State != "" && f.State != "all" {
 		for _, state := range strings.Split(f.State, ",") {
 			switch state {
-			case "notify", "auto", "pending", "approved", "rejected", "expired", "resolved":
+			case "notify", "auto", "pending", "approved", "rejected", "expired", "resolved", "ordered", "done", "failed", "no-actor", "reverted":
 			default:
 				writeErr(w, 400, "bad state")
 				return
@@ -97,6 +97,9 @@ func (s *Server) handleProposalDecision(state string) http.HandlerFunc {
 			return
 		}
 		s.event(r.Context(), "proposal."+state, u.Name, "proposal #"+strconv.FormatInt(id, 10)+" "+state)
+		if state == "approved" {
+			s.kickPlanner()
+		}
 		p, e := s.st.GetProposal(r.Context(), id)
 		if e != nil {
 			writeErr(w, 500, "internal error")

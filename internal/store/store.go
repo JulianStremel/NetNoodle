@@ -311,6 +311,7 @@ type Store interface {
 	Tags
 	Settings
 	Proposals
+	Orders
 	Close() error
 }
 
@@ -366,7 +367,7 @@ type Proposals interface {
 	OpenVulnIDs(context.Context, int64) ([]string, error)
 	// UpsertProposal returns the saved record and whether it was inserted or
 	// a closed/notification row was reopened into pending/auto.
-	// Approved decisions retain their reviewed scope until M6.
+	// Reviewed and executed decisions retain their scope.
 	UpsertProposal(context.Context, Proposal) (Proposal, bool, error)
 	ListProposals(context.Context, ProposalFilter) ([]Proposal, error)
 	ProposalStats(context.Context) (map[string]int, error)

@@ -78,6 +78,11 @@ func run() error {
 	log.Info("tls", "fingerprint", fp)
 
 	srv := server.New(cfg, st, web.FS(), fp, log)
+	orderKey, err := server.LoadOrCreateOrderKey(cfg.DataDir)
+	if err != nil {
+		return err
+	}
+	srv.SetOrderKey(orderKey)
 
 	notifiers, err := registry.BuildAll(notify.Registry, cfg.Notifiers)
 	if err != nil {
@@ -102,6 +107,7 @@ func run() error {
 		return err
 	}
 	srv.SetDecide(deciders, guards)
+	go srv.RunPlanner(ctx)
 	go srv.RunIntel(ctx, cfg.IntelRefresh.Duration)
 	if err := srv.RunSources(ctx, cfg.Sources); err != nil {
 		return err
