@@ -62,6 +62,9 @@ func (s *Server) RunPull(ctx context.Context) {
 	defer t.Stop()
 	sem := make(chan struct{}, pullParallel)
 	for {
+		if err := s.st.ExpireOnboard(ctx, s.now()); err != nil && ctx.Err() == nil {
+			s.log.Warn("expire onboarding", "err", err)
+		}
 		s.pullDue(ctx, sem)
 		select {
 		case <-ctx.Done():
@@ -158,6 +161,7 @@ func (s *Server) pullOne(ctx context.Context, p store.PullPeer) {
 			return
 		}
 		s.event(ctx, "peer.paired", p.Name, "pull agent "+p.Name+" paired, certificate "+pin)
+		_ = s.st.ConnectOnboard(ctx, p.ID, s.now())
 		target.Pin = pin
 	}
 	raw, err := tr.Pull(ctx, target)

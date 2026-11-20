@@ -99,7 +99,72 @@ function pullCard(data, out) {
   return card;
 }
 
+function onboardWizard() {
+  const kind = el("select", {}, ["agent", "agent-pull", "scan", "actor-host", "actor-unifi", "actor-proxmox"].map((value) => el("option", { value }, value)));
+  const name = el("input", { required: true, maxlength: "63", pattern: "[A-Za-z0-9][A-Za-z0-9._-]{0,62}", placeholder: "web01" });
+  const platform = el("select", {}, el("option", { value: "linux" }, "Linux"), el("option", { value: "windows" }, "Windows"));
+  const password = el("input", { type: "password", required: true, maxlength: "1024", autocomplete: "current-password" });
+  const message = el("p", { class: "error", role: "alert" });
+  const output = el("div");
+  const submit = el("button", { type: "submit" }, "Add peer");
+  let timer;
+  let active = true;
+  let generation = 0;
+  window.addEventListener("nn:before-render", () => { active = false; clearTimeout(timer); }, { once: true });
+  const supported = () => {
+    const windows = kind.value === "agent" || kind.value === "scan";
+    platform.options[1].disabled = !windows;
+    if (!windows) platform.value = "linux";
+  };
+  kind.addEventListener("change", supported);
+  const copyField = (title, value) => el("div", {}, el("h3", {}, title),
+    el("pre", { class: "mono" }, value),
+    el("button", { type: "button", class: "link", onclick: async (event) => {
+      try { await navigator.clipboard.writeText(value); event.target.textContent = "Copied"; }
+      catch { message.textContent = "Copy failed. Select and copy the text above."; }
+    } }, `Copy ${title.toLowerCase()}`));
+  const form = el("form", { onsubmit: async (event) => {
+    event.preventDefault();
+    message.textContent = "";
+    submit.disabled = true;
+    try {
+      const result = await api("/api/onboard", { method: "POST", body: { kind: kind.value, name: name.value.trim(), platform: platform.value, password: password.value } });
+      password.value = "";
+      if (!active) return;
+      clearTimeout(timer);
+      const current = ++generation;
+      const status = el("p", { role: "status", "aria-live": "polite" }, "Waiting for installation");
+      const steps = el("div");
+      const cancel = el("button", { type: "button", class: "link", onclick: async () => {
+        cancel.disabled = true;
+        try { await api(`/api/onboard/${result.session}/cancel`, { method: "POST", body: {} }); await poll(); }
+        catch (error) { message.textContent = error.message; cancel.disabled = false; }
+      } }, "Cancel installation");
+      const poll = async () => {
+        clearTimeout(timer);
+        if (!active || current !== generation) return;
+        try {
+          const session = await api(`/api/onboard/${result.session}`);
+          if (!active || current !== generation) return;
+          const labels = { created: "Waiting for installation", enrolled: "Enrolled", connected: "Connected", done: "Done", aborted: "Rolled back", expired: "Rolled back: setup code expired" };
+          status.textContent = `${labels[session.state] || session.state}${session.error ? `: ${session.error}` : ""}`;
+          steps.replaceChildren(...session.steps.map((step) => el("p", { class: step.ok ? "muted" : "error" }, `${step.ok ? "✓" : "✗"} ${step.name}${step.message ? `: ${step.message}` : ""}`)));
+          if (["done", "aborted", "expired"].includes(session.state)) { cancel.disabled = true; submit.disabled = false; return; }
+        } catch (error) { status.textContent = `Status unavailable: ${error.message}`; }
+        if (active && current === generation) timer = setTimeout(poll, 2000);
+      };
+      output.replaceChildren(el("p", { class: "muted" }, `On the device, run the command. Then paste the setup code. It expires at ${fmtTime(result.expires)}. Keep the code private.`),
+        copyField("Command", result.one_liner), copyField("Setup code", result.setup_code), status, steps, cancel);
+      await poll();
+    } catch (error) { message.textContent = error.message; submit.disabled = false; }
+    finally { password.value = ""; }
+  } }, el("div", { class: "grid" }, el("label", {}, "Kind", kind), el("label", {}, "Name", name),
+    el("label", {}, "Platform", platform), el("label", {}, "Confirm your password", password)), submit, message);
+  return el("div", { class: "card" }, el("h2", {}, "Add peer"), form, output);
+}
+
 async function page(root) {
+  root.append(onboardWizard());
   const [peers, tokens, pulls] = await Promise.all([api("/api/peers"), api("/api/join-tokens"), api("/api/pull-peers")]);
   const out = el("div");
   const tokensCard = el("div", { class: "card" });

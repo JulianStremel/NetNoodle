@@ -204,6 +204,9 @@ func (s *Server) acceptObservation(ctx context.Context, p store.Peer, raw []byte
 		s.log.Error("ingest", "peer", p.Name, "err", err)
 		return res, http.StatusInternalServerError, errIngest
 	}
+	if err := s.st.ConnectOnboard(ctx, p.ID, s.now()); err != nil {
+		return res, http.StatusServiceUnavailable, errIngest
+	}
 	return res, http.StatusOK, nil
 }
 

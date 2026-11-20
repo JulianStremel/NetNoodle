@@ -20,6 +20,7 @@ import (
 
 // Server holds the HTTP handlers and their dependencies.
 type Server struct {
+	onboard  *onboardState
 	updateMu sync.Mutex
 	// ingestSlots bounds how many observation bodies are read at the same
 	// time (security review 2026-11-20: 60 parallel 64 MiB bodies).
@@ -50,6 +51,7 @@ type Server struct {
 // New creates a server. ui is the static web UI file system.
 func New(cfg Config, st store.Store, ui fs.FS, fingerprint string, log *slog.Logger) *Server {
 	return &Server{
+		onboard:     newOnboardState(),
 		cfg:         cfg,
 		st:          st,
 		log:         log,
@@ -74,6 +76,15 @@ func New(cfg Config, st store.Store, ui fs.FS, fingerprint string, log *slog.Log
 // Handler returns the root HTTP handler.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /install.sh", s.handleInstallScript)
+	mux.HandleFunc("GET /install.ps1", s.handleInstallScript)
+	mux.HandleFunc("GET /v1/install/manifest", s.handleInstallManifest)
+	mux.HandleFunc("POST /api/onboard", requireUser(s.handleCreateOnboard))
+	mux.HandleFunc("GET /api/onboard/{id}", requireUser(s.handleOnboardStatus))
+	mux.HandleFunc("POST /api/onboard/{id}/cancel", requireUser(func(w http.ResponseWriter, r *http.Request) { s.abortOnboard(w, r, false) }))
+	mux.HandleFunc("GET /v1/onboard/{id}", s.handleScriptStatus)
+	mux.HandleFunc("POST /v1/onboard/{id}/step", s.handleOnboardStep)
+	mux.HandleFunc("POST /v1/onboard/{id}/abort", func(w http.ResponseWriter, r *http.Request) { s.abortOnboard(w, r, true) })
 
 	// Component protocol.
 	mux.HandleFunc("GET /v1/health", s.handleHealth)

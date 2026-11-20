@@ -52,7 +52,15 @@ func TestMigrationBackupSafety(t *testing.T) {
 		t.Fatal("new database backed up")
 	}
 	opts := migrationOptions{fs: migrationFS(t), free: freeSpace}
-	opts.fs.(fstest.MapFS)["migrations/0012_test.sql"] = &fstest.MapFile{Data: []byte(`CREATE TABLE test_new (id INTEGER);`)}
+	names, err := fs.Glob(opts.fs, "migrations/*.sql")
+	if err != nil || len(names) == 0 {
+		t.Fatalf("migration inventory: %v, %v", names, err)
+	}
+	latest := strings.TrimSuffix(names[len(names)-1], ".sql")
+	// Appending to the latest stem sorts after every real migration, even
+	// when new migrations are added to the embedded file system.
+	next := latest + "_test"
+	opts.fs.(fstest.MapFS)[next+".sql"] = &fstest.MapFile{Data: []byte(`CREATE TABLE test_new (id INTEGER);`)}
 	checks := 0
 	opts.free = func(string) (uint64, error) { checks++; return 0, nil }
 	if _, err := openWithOptions(ctx, path, opts); err == nil || !strings.Contains(err.Error(), "insufficient free disk") {
@@ -75,7 +83,7 @@ func TestMigrationBackupSafety(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(filepath.Base(backup), "0011_peer_version-") {
+	if !strings.HasPrefix(filepath.Base(backup), "netnoodle-"+filepath.Base(latest)+"-") {
 		t.Fatal(backup)
 	}
 	old, err := openExisting(ctx, backup, "ro")
@@ -102,7 +110,7 @@ func TestMigrationBackupSafety(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Each failing migration is fully rolled back; the error identifies its backup.
-	opts.fs.(fstest.MapFS)["migrations/0013_fail.sql"] = &fstest.MapFile{Data: []byte(`CREATE TABLE should_rollback(id); INVALID SQL;`)}
+	opts.fs.(fstest.MapFS)[next+"_fail.sql"] = &fstest.MapFile{Data: []byte(`CREATE TABLE should_rollback(id); INVALID SQL;`)}
 	opts.free = freeSpace
 	if _, err := openWithOptions(ctx, path, opts); err == nil || !strings.Contains(err.Error(), "pre-migration backup:") {
 		t.Fatal(err)

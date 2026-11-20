@@ -4,6 +4,21 @@ Collect data: the subnet scanner, the agent on Linux and Windows, the helpers, a
 
 [← Back to the README](../../README.md)
 
+## Add a peer with one command
+
+1. Open **Peers**. Use **Add peer**.
+2. Select the kind and platform. Enter a name and your password.
+3. Copy the command. Run it on the device.
+4. At the prompt, paste the setup code. The code is valid for 30 minutes. Keep it private.
+5. Enter the local settings that the script asks for. API secrets stay on the device.
+6. Wait for **Done** on the Peers page. The script checks the service and the connection to the server.
+
+Linux needs systemd. Windows supports the agent and scanner. Actors start with `dry_run: true` and an empty action list. Set the local policy before you use an actor.
+
+For automation, pass `--code <setup-code>` and `--yes`. `--yes` refuses prompts that still need local settings or secrets; it also refuses to repair an existing install without a person confirming it. Prefer the interactive setup-code prompt on shared devices so the code stays out of command histories and process arguments. For pull agents, enter the server-reachable address as `host:port`, without an HTTPS prefix.
+
+If the install fails, the script removes its files and service. The server removes the peer. To remove an install later, run the script with `--uninstall <name>` as an administrator. This removes the local install. Disable the peer on the Peers page if you no longer use it.
+
 ## Procedure: enroll a scanner
 
 1. In the web interface, open **Peers**.

@@ -88,6 +88,9 @@ func (s *DB) Enroll(ctx context.Context, joinHash []byte, name string, tokenHash
 		return p, err
 	}
 	p.ID, _ = r.LastInsertId()
+	if _, err := tx.ExecContext(ctx, `UPDATE onboarding SET peer_id=?,state='enrolled',updated=? WHERE join_id=? AND state='created' AND expires>?`, p.ID, ts(now), jid, ts(now)); err != nil {
+		return p, err
+	}
 	p.Name, p.Role, p.Created, p.LastSeen = name, role, now, now
 	return p, tx.Commit()
 }

@@ -311,6 +311,7 @@ type Intel interface {
 
 // Store is the full persistence interface.
 type Store interface {
+	Onboarding
 	Users
 	Sessions
 	Events
@@ -323,6 +324,42 @@ type Store interface {
 	Proposals
 	Orders
 	Close() error
+}
+
+// OnboardSession holds an installation. Secrets are stored as hashes only.
+type OnboardSession struct {
+	ID         string        `json:"session"`
+	SecretHash []byte        `json:"-"`
+	JoinID     int64         `json:"-"`
+	Kind       string        `json:"kind"`
+	Name       string        `json:"name"`
+	Platform   string        `json:"platform"`
+	State      string        `json:"state"`
+	Error      string        `json:"error"`
+	PeerID     int64         `json:"peer_id"`
+	Expires    time.Time     `json:"expires"`
+	Updated    time.Time     `json:"-"`
+	Steps      []OnboardStep `json:"steps"`
+}
+
+type OnboardStep struct {
+	Name    string    `json:"name"`
+	OK      bool      `json:"ok"`
+	At      time.Time `json:"at"`
+	Message string    `json:"message"`
+}
+
+type Onboarding interface {
+	// CreateOnboard creates a bound, single-use token and session atomically.
+	CreateOnboard(context.Context, OnboardSession, []byte, string, time.Time) error
+	GetOnboard(context.Context, string) (OnboardSession, error)
+	ConnectOnboard(context.Context, int64, time.Time) error
+	AddOnboardStep(context.Context, string, OnboardStep) error
+	// AbortOnboard deletes the peer and revokes the join token atomically.
+	AbortOnboard(context.Context, string, string, time.Time) error
+	ExpireOnboard(context.Context, time.Time) error
+	// PairOnboard turns this session's enrolled agent into a pull peer.
+	PairOnboard(context.Context, string, string, string, time.Time) error
 }
 
 // Tags are operator-owned labels; reports cannot change them.

@@ -81,6 +81,10 @@ func (s *Server) handleActorHello(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "internal error")
 		return
 	}
+	if err := s.st.ConnectOnboard(r.Context(), p.ID, s.now()); err != nil {
+		writeErr(w, 503, "try again")
+		return
+	}
 	s.kickPlanner()
 	writeJSON(w, 200, map[string]string{"actor": p.Name})
 }
