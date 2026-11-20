@@ -41,6 +41,25 @@ Status: proposal (D-065). User requests: easy deployment, updates of the whole s
 4. A database that is newer than the program (downgrade) is refused.
 5. Recovery: `nn-server restore --latest` (or `--file`) puts a backup back.
 
+## 3a. Server update from the web interface
+
+The server container never gets the Docker or Podman socket: whoever has it is root on the host. The server only **asks**; a small updater on the host **does** the update and checks everything itself.
+
+**Mode A — host updater (recommended; Docker host or VM with systemd).** One-time setup: `nn-host-updater` (a small binary plus a systemd path unit and a oneshot service).
+
+1. The web interface shows "Update available: v1.5.0 (channel stable)" with the release notes. An administrator clicks **Update now** (password asked again) or **Update in the next window**.
+2. The server writes a request `{id, channel, version}` into a shared directory (`/var/lib/netnoodle/updater/requests/`, a bind mount, read-write for the server only in this directory).
+3. The path unit starts the updater (root, on the host). The updater does NOT trust the request content beyond "please update to the channel/version": it resolves the image digest itself from the **image repository configured on the host** (the server cannot name another image), and it verifies the upstream signature of that digest.
+4. Same state machine as for agents (section 4): asks the server for a backup (`docker exec … nn-server backup`, which uses the same backup as before migrations), pulls, recreates the container with the unchanged compose file and the new digest, and checks `/v1/health` (new version reported) within 2 minutes.
+5. Failure at any step: the old digest is started again (it is still in the local image cache, kept until the next successful update); if the new version already migrated the database, the updater restores the backup first. State and log lines go to `updater/status/<id>.json`, which the web interface shows (progress, result, reason).
+6. **Rollback button:** within the retention time (default 7 days) the previous digest and its backup can be put back from the web interface.
+
+On a VM without containers, the same updater replaces the `nn-server` binary instead (download from the release, both signatures, `*.prev`, health check, rollback).
+
+**Mode B — updater sidecar (for hosts without systemd, for example a NAS).** A separate container `nn-updater` with the Docker socket, on an internal network, without a published port. It accepts only authenticated requests from the server (shared secret file) and only the same "update to channel/version" request; the image repository and signature rules are in its own configuration. The socket risk stays with this small container, never with the server. Documented as the less secure mode.
+
+**Common rules:** updates only through a channel (no downgrades, section 2a); the kill switch and open orders are kept (actors drain); the web interface shows who started the update.
+
 ## 4. Agent and actor update (self-update, controlled by the server)
 
 Signatures: each binary has two signatures — the upstream release signature (CI, Sigstore or an offline release key) and the signature of the local server at download time. A peer installs only a binary that has both. A compromised server can thus not distribute its own code.
