@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -121,9 +122,15 @@ func TestBlockScriptAndArguments(t *testing.T) {
 			t.Fatalf("bad script invocation: %+v", c)
 		}
 	}
-	for _, want := range []string{"hook input priority -10", "hook prerouting priority -150", "input iifname \"lo\" accept", "prerouting iifname \"lo\" accept", "input ct state established,related accept", "prerouting ct state established,related accept", "input tcp dport @blocked_tcp drop", "prerouting udp dport @blocked_udp drop", "443 timeout 3600s", "53 timeout 3600s"} {
+	for _, want := range []string{"hook input priority -10", "hook prerouting priority -150", "input iifname \"lo\" accept", "prerouting iifname \"lo\" accept", "input ct state established,related accept", "prerouting ct state established,related accept", "input tcp dport @blocked_tcp drop", "prerouting udp dport @blocked_udp drop"} {
 		if !strings.Contains(scripts, want) {
 			t.Errorf("missing %q in %s", want, scripts)
+		}
+	}
+	// The timeout is the remaining TTL; under load one second can pass.
+	for _, port := range []string{"443", "53"} {
+		if !regexp.MustCompile(port + ` timeout 3(599|600)s`).MatchString(scripts) {
+			t.Errorf("missing %s timeout ~3600s in %s", port, scripts)
 		}
 	}
 	if strings.Count(scripts, "add element inet netnoodle blocked_tcp") != 1 || strings.Count(scripts, "add element inet netnoodle blocked_udp") != 1 {

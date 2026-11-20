@@ -48,6 +48,11 @@ func (s *Server) emit(ctx context.Context, e notify.Event, actor, data string) {
 	if e.At.IsZero() {
 		e.At = s.now()
 	}
+	// MQTT has its own bounded queue and shares one connection with discovery.
+	// Queue every event before the general notifier concurrency limiter.
+	if s.mqtt != nil {
+		_ = s.mqtt.Notify(ctx, e)
+	}
 	if err := s.st.AddEvent(ctx, store.Event{At: e.At, Type: e.Type, Actor: actor, Summary: e.Title, Data: data}); err != nil {
 		s.log.Error("event", "err", err)
 	}

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/JulianStremel/netnoodle/internal/mqtt"
 	"github.com/JulianStremel/netnoodle/internal/notify"
 	"github.com/JulianStremel/netnoodle/internal/store"
 )
@@ -24,6 +25,7 @@ type Server struct {
 	fingerprint string
 	limiter     *loginLimiter
 	notifiers   []notify.Notifier
+	mqtt        *mqtt.Publisher
 	notifySem   chan struct{}
 	enrollLim   *loginLimiter
 	bcryptSem   chan struct{}

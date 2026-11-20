@@ -209,6 +209,11 @@ const maxHitsPerDevice = 50000
 // MatchDevice runs all matchers for one device and stores the findings.
 // A matcher that fails leaves the device's earlier findings unchanged.
 func (s *Server) MatchDevice(ctx context.Context, id int64) error {
+	if s.mqtt != nil {
+		// Enrichment can mark an existing open finding as KEV without opening
+		// a new finding (and therefore without a finding.new notification).
+		defer s.mqtt.Trigger()
+	}
 	ms, es := s.intelPlugins()
 	comps, err := s.st.DeviceComponents(ctx, id)
 	if err != nil {

@@ -18,6 +18,7 @@ func TestQueryFor(t *testing.T) {
 		want          Query
 		ok            bool
 	}{
+		{"pkg:pypi/homeassistant@2026.11.0", "ignored", Query{"PyPI", "homeassistant", "2026.11.0"}, true},
 		{"pkg:golang/tailscale.com@v1.76.1", "ignored", Query{"Go", "tailscale.com", "v1.76.1"}, true},
 		{"pkg:golang/golang.org/x/net@v0.30.0", "", Query{"Go", "golang.org/x/net", "v0.30.0"}, true},
 		{"pkg:deb/debian/libssl3@3.0.11-1~deb12u2?arch=amd64&distro=debian-12&upstream=openssl", "",

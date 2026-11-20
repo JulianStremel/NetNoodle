@@ -28,6 +28,8 @@ type Config struct {
 	// Sources also take an "interval" (default 10m).
 	Sources   []SourceSpec    `json:"sources,omitempty"`
 	Notifiers []registry.Spec `json:"notifiers,omitempty"`
+	// MQTT enables discovery and event publishing when present; absent is disabled.
+	MQTT json.RawMessage `json:"mqtt,omitempty"`
 
 	// Decisions default to rules and the four built-in safety guards.
 	// An explicit empty list disables the corresponding plug-ins.

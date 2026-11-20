@@ -123,6 +123,8 @@ func QueryFor(c proto.Component) (Query, bool) {
 	distro := p.Qualifiers["distro"]
 	q := Query{Name: p.Name, Version: p.Version}
 	switch p.Type {
+	case "pypi":
+		q.Ecosystem = "PyPI"
 	case "golang":
 		q.Ecosystem = "Go"
 		if p.Namespace != "" {

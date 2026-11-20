@@ -1,6 +1,6 @@
 # Design: Home Assistant integration
 
-Status: plan (D-061). Not implemented. User request: collect data from Home Assistant, and give data to Home Assistant for automations.
+Status: steps 1 and 2 implemented (source `homeassistant`, MQTT discovery); steps 3 to 5 planned (D-061). User request: collect data from Home Assistant, and give data to Home Assistant for automations.
 
 ## 1. Two directions
 

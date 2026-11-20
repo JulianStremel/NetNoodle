@@ -339,6 +339,45 @@ The source gets IP addresses of containers from Proxmox. For virtual machines, i
 
 When an agent also operates in a guest, the server merges the two records by the MAC address.
 
+## Procedure: connect Home Assistant
+
+netnoodle reads devices from Home Assistant, and gives data to Home Assistant for automations. Refer to [docs/design/homeassistant.md](docs/design/homeassistant.md).
+
+**Read from Home Assistant** (source `homeassistant`):
+
+1. In Home Assistant, make a dedicated user. The device registry needs an administrator user. Make a long-lived access token for this user and write it to a file that only nn-server can read.
+2. Add the source to `netnoodle.json`:
+
+   ```json
+   { "sources": [ { "type": "homeassistant", "name": "ha-home", "interval": "10m",
+       "settings": { "url": "https://ha.local:8123", "token_file": "/etc/netnoodle/ha-token", "fingerprint": "<sha256>" } } ] }
+   ```
+
+The source reads the device registry (manufacturer, model, firmware, MAC addresses), the device trackers (IP addresses) and the versions of Home Assistant, Home Assistant OS and the add-ons. The server compares the Home Assistant version with the OSV data (ecosystem PyPI). Devices merge with the same devices from UniFi or the scanner by their MAC address.
+
+**Give data to Home Assistant** (MQTT discovery):
+
+1. Add the broker that Home Assistant uses to `netnoodle.json`:
+
+   ```json
+   { "mqtt": { "broker": "mqtts://mqtt.local:8883", "username": "netnoodle", "password_file": "/etc/netnoodle/mqtt-password" } }
+   ```
+
+2. Home Assistant makes these entities automatically (device "netnoodle"):
+
+   | Entity | Content |
+   |---|---|
+   | `sensor.netnoodle_open_findings` | Open findings; attributes: critical, KEV, exposed |
+   | `sensor.netnoodle_devices` | Devices; attributes: new in 24 h, internet, tunnel, local |
+   | `binary_sensor.netnoodle_kev_reachable` | On if a device that is reachable from the internet or a tunnel has a known exploited vulnerability |
+   | `sensor.netnoodle_pending_approvals` | Decisions that wait for approval |
+   | `binary_sensor.netnoodle_kill_switch` | State of the kill switch (read only) |
+
+3. For a risk sensor of a device, give the device the tag `ha` on its device page.
+4. All events go to the topic `netnoodle/event` (JSON). Use them as MQTT triggers in automations.
+
+If nn-server stops, the entities become unavailable (MQTT last will). Without the key `mqtt`, nothing is published. `mqtt://` without TLS is permitted only for a broker on the same computer, or with `"allow_plain": true`.
+
 ## Procedure: send notifications
 
 Add a notifier to `netnoodle.json`:

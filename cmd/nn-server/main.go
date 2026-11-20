@@ -89,6 +89,11 @@ func run() error {
 		return err
 	}
 	srv.SetNotifiers(notifiers)
+	stopMQTT, err := srv.StartMQTT(ctx)
+	if err != nil {
+		return err
+	}
+	defer stopMQTT()
 	matchers, err := registry.BuildAll(intel.Matchers, cfg.Matchers)
 	if err != nil {
 		return err
