@@ -48,6 +48,7 @@ func (t Tier) String() string {
 
 // Device is the device context a decider can see.
 type Device struct {
+	Reach   string // highest reach of the vulnerable component's exposed listeners (local if none)
 	ID      int64
 	Name    string
 	Kind    string

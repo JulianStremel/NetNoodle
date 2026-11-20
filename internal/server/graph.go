@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"net/netip"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/JulianStremel/netnoodle/internal/store"
@@ -20,6 +19,7 @@ type GraphService struct {
 	Address string `json:"address,omitempty"`
 	Process string `json:"process,omitempty"`
 	Product string `json:"product,omitempty"`
+	Reach   string `json:"reach"`
 	Exposed bool   `json:"exposed"` // listens on a non-loopback address
 	Vulns   int    `json:"vulns"`   // open findings in the owning package
 	KEV     bool   `json:"kev"`     // one of them is known exploited
@@ -41,24 +41,27 @@ type GraphVuln struct {
 
 // GraphNode is one device.
 type GraphNode struct {
-	Tags       []string       `json:"tags"`
-	ID         int64          `json:"id"`
-	Name       string         `json:"name"`
-	Kind       string         `json:"kind"`
-	Parent     int64          `json:"parent,omitempty"`
-	Children   []int64        `json:"children"`
-	IPs        []string       `json:"ips"`
-	MACs       []string       `json:"macs"`
-	Networks   []string       `json:"networks"`
-	Sources    []string       `json:"sources"`
-	Agent      bool           `json:"agent"` // reported by an agent (has package data)
-	Components int            `json:"components"`
-	Services   []GraphService `json:"services"`
-	Findings   int            `json:"findings"`
-	KEV        int            `json:"kev"`
-	MaxScore   float64        `json:"max_score"`
-	MaxEPSS    float64        `json:"max_epss"`
-	Exposed    int            `json:"exposed"` // open findings in packages with an exposed service
+	Reach         string   `json:"reach"`
+	ReachEvidence []string `json:"reach_evidence"`
+	routed        bool
+	Tags          []string       `json:"tags"`
+	ID            int64          `json:"id"`
+	Name          string         `json:"name"`
+	Kind          string         `json:"kind"`
+	Parent        int64          `json:"parent,omitempty"`
+	Children      []int64        `json:"children"`
+	IPs           []string       `json:"ips"`
+	MACs          []string       `json:"macs"`
+	Networks      []string       `json:"networks"`
+	Sources       []string       `json:"sources"`
+	Agent         bool           `json:"agent"` // reported by an agent (has package data)
+	Components    int            `json:"components"`
+	Services      []GraphService `json:"services"`
+	Findings      int            `json:"findings"`
+	KEV           int            `json:"kev"`
+	MaxScore      float64        `json:"max_score"`
+	MaxEPSS       float64        `json:"max_epss"`
+	Exposed       int            `json:"exposed"` // open findings in packages with an exposed service
 	// Risk is 0-10: the worst open finding (see findingWeight).
 	Risk float64 `json:"risk"`
 	// RelatedRisk is the highest risk of the host, its guests and the
@@ -89,15 +92,7 @@ type Graph struct {
 }
 
 func isExposed(addr string) bool {
-	a := strings.Trim(addr, "[]")
-	if a == "" || a == "*" {
-		return true
-	}
-	if a == "localhost" {
-		return false
-	}
-	ip, err := netip.ParseAddr(a)
-	return err != nil || !ip.IsLoopback()
+	return listenerReach(addr, deviceReach{level: reachLocal}) != ""
 }
 
 // networkOf returns the /24 (IPv4) or /64 (IPv6) of an address, or "".
@@ -119,38 +114,49 @@ func networkOf(s string) string {
 }
 
 // findingWeight rates one finding 0-10: 70 % of the CVSS score, plus 2
-// if attackers use it (KEV), plus 1 if the package has an exposed service,
+// if attackers use it (KEV), plus local/tunnel/internet exposure (1/1.5/2),
 // plus the EPSS probability (0-1).
-func findingWeight(score float64, kev, exposed bool, epss float64) float64 {
+func findingWeight(score float64, kev bool, reach string, epss float64) float64 {
 	w := score*0.7 + epss
 	if kev {
 		w += 2
 	}
-	if exposed {
+	switch reach {
+	case reachLocal:
 		w++
+	case reachTunnel:
+		w += 1.5
+	case reachInternet:
+		w += 2
 	}
 	return min(w, 10)
 }
 
 func buildGraph(devs []store.DeviceRow, fs []store.FindingRow, svcs []store.DeviceService, now time.Time) Graph {
-	g := Graph{Generated: now, Nodes: make([]GraphNode, 0, len(devs)), Networks: []GraphNetwork{}, Stats: map[string]int{}}
+	g := Graph{Generated: now, Nodes: make([]GraphNode, 0, len(devs)), Networks: []GraphNetwork{}, Stats: map[string]int{"reach.local": 0, "reach.tunnel": 0, "reach.internet": 0}}
 	idx := map[int64]int{}
+	routes := routedNetworks(devs)
+	reaches := map[int64]deviceReach{}
 	for _, d := range devs {
+		r := classifyDevice(d, routes)
+		reaches[d.ID] = r
 		n := GraphNode{
+			Reach: r.level, ReachEvidence: r.evidence, routed: r.routed,
 			Tags: append([]string{}, d.Tags...), ID: d.ID, Name: d.Name, Kind: d.Kind, Parent: d.ParentID, Children: []int64{},
 			IPs: []string{}, MACs: []string{}, Networks: []string{}, Sources: d.Sources,
 			Components: d.Components, Services: []GraphService{}, Findings: d.Findings, KEV: d.KEV,
 			MaxScore: d.MaxScore, Related: []int64{}, Top: []GraphVuln{}, LastSeen: d.LastSeen,
 		}
+		n.IPs = append(n.IPs, deviceIPs(d)...)
 		nets := map[string]bool{}
+		for _, ip := range n.IPs {
+			if k := networkOf(ip); k != "" && !nets[k] {
+				nets[k] = true
+				n.Networks = append(n.Networks, k)
+			}
+		}
 		for _, id := range d.Identifiers {
 			switch id.Kind {
-			case "ip":
-				n.IPs = append(n.IPs, id.Value)
-				if k := networkOf(id.Value); k != "" && !nets[k] {
-					nets[k] = true
-					n.Networks = append(n.Networks, k)
-				}
 			case "mac":
 				n.MACs = append(n.MACs, id.Value)
 			case "agent":
@@ -167,19 +173,26 @@ func buildGraph(devs []store.DeviceRow, fs []store.FindingRow, svcs []store.Devi
 	}
 	pkgVulns := map[pkgKey]int{}
 	pkgKEV := map[pkgKey]bool{}
+	pkgReach := map[pkgKey]string{}
+	for _, svc := range svcs {
+		k := pkgKey{svc.DeviceID, svc.Component}
+		if r := listenerReach(svc.Address, reaches[svc.DeviceID]); r != "" {
+			pkgReach[k] = maxReach(pkgReach[k], r)
+		}
+	}
 	for _, f := range fs {
 		i, ok := idx[f.DeviceID]
 		if !ok {
 			continue
 		}
 		n := &g.Nodes[i]
-		exposed := len(f.Exposed) > 0
+		k := pkgKey{f.DeviceID, f.PURL}
+		exposed := pkgReach[k] != ""
 		if exposed {
 			n.Exposed++
 		}
 		n.MaxEPSS = max(n.MaxEPSS, f.EPSS)
-		n.Risk = max(n.Risk, findingWeight(f.Score, f.KEV, exposed, f.EPSS))
-		k := pkgKey{f.DeviceID, f.PURL}
+		n.Risk = max(n.Risk, findingWeight(f.Score, f.KEV, pkgReach[k], f.EPSS))
 		pkgVulns[k]++
 		pkgKEV[k] = pkgKEV[k] || f.KEV
 		n.Top = append(n.Top, GraphVuln{ID: f.VulnID, Score: f.Score, KEV: f.KEV, EPSS: f.EPSS, Package: f.Package,
@@ -197,7 +210,7 @@ func buildGraph(devs []store.DeviceRow, fs []store.FindingRow, svcs []store.Devi
 		}
 		g.Nodes[i].Services = append(g.Nodes[i].Services, GraphService{
 			Port: s.Port, Proto: s.Proto, Address: s.Address, Process: s.Process, Product: s.Product,
-			Exposed: isExposed(s.Address), Vulns: pkgVulns[k], KEV: pkgKEV[k], Package: pkg,
+			Reach: listenerReach(s.Address, reaches[s.DeviceID]), Exposed: isExposed(s.Address), Vulns: pkgVulns[k], KEV: pkgKEV[k], Package: pkg,
 		})
 	}
 	// Tree relations.
@@ -301,6 +314,7 @@ func buildGraph(devs []store.DeviceRow, fs []store.FindingRow, svcs []store.Devi
 	// Stats.
 	for _, n := range g.Nodes {
 		g.Stats["devices"]++
+		g.Stats["reach."+n.Reach]++
 		g.Stats["kind."+n.Kind]++
 		if n.Findings > 0 {
 			g.Stats["vulnerable"]++
@@ -376,7 +390,12 @@ func (s *Server) handleRelated(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	g := buildGraph(devs, fs, nil, s.now())
+	svcs, err := s.st.ListAllServices(ctx)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	g := buildGraph(devs, fs, svcs, s.now())
 	byID := map[int64]*GraphNode{}
 	for i := range g.Nodes {
 		byID[g.Nodes[i].ID] = &g.Nodes[i]

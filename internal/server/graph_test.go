@@ -13,7 +13,7 @@ func TestBuildGraph(t *testing.T) {
 	ip := func(v string) proto.Identifier { return proto.Identifier{Kind: "ip", Value: v, Strength: proto.Weak} }
 	devs := []store.DeviceRow{
 		{ID: 1, Name: "pve1", Kind: "host", Identifiers: []proto.Identifier{ip("10.0.0.11"), {Kind: "agent", Value: "pve1"}}},
-		{ID: 2, Name: "web", Kind: "vm", ParentID: 1, Identifiers: []proto.Identifier{ip("10.0.0.50"), ip("fe80::1")}},
+		{ID: 2, Name: "web", Kind: "vm", ParentID: 1, Identifiers: []proto.Identifier{ip("10.0.0.50"), ip("fe80::1"), ip("8.8.4.4")}},
 		{ID: 3, Name: "dns", Kind: "container", ParentID: 1, Identifiers: []proto.Identifier{ip("10.0.1.53")}},
 		{ID: 4, Name: "lonely", Kind: "host", ParentID: 99},
 	}
@@ -31,8 +31,8 @@ func TestBuildGraph(t *testing.T) {
 		by[n.Name] = n
 	}
 	web, dns, pve := by["web"], by["dns"], by["pve1"]
-	// 7.5*0.7 + 0.5 + 2 (KEV) + 1 (exposed) = 8.75 > 9.8*0.7 = 6.86
-	if web.Risk < 8.74 || web.Risk > 8.76 || web.Exposed != 1 || web.Top[0].ID != "CVE-1" {
+	// 7.5*0.7 + 0.5 + 2 (KEV) + 2 (internet listener) = 9.75 > 9.8*0.7 = 6.86
+	if web.Risk < 9.74 || web.Risk > 9.76 || web.Exposed != 1 || web.Top[0].ID != "CVE-1" {
 		t.Fatalf("web = %+v", web)
 	}
 	if !slices.Equal(pve.Children, []int64{2, 3}) || !slices.Equal(web.Related, []int64{1, 3}) || !slices.Equal(dns.Related, []int64{1, 2}) {
@@ -44,10 +44,13 @@ func TestBuildGraph(t *testing.T) {
 	if by["lonely"].Parent != 0 {
 		t.Fatal("dangling parent kept")
 	}
-	if !web.Services[0].Exposed || !web.Services[0].KEV || web.Services[0].Vulns != 1 || web.Services[1].Exposed {
+	if !web.Services[0].Exposed || !web.Services[0].KEV || web.Services[0].Vulns != 1 || web.Services[0].Reach != reachInternet || web.Services[1].Exposed || web.Services[1].Reach != "" {
 		t.Fatalf("services = %+v", web.Services)
 	}
-	if len(g.Networks) != 2 || g.Networks[0].ID != "10.0.0.0/24" || !slices.Equal(g.Networks[0].Devices, []int64{1, 2}) {
+	if web.Reach != reachInternet || pve.Reach != reachLocal || g.Stats["reach.internet"] != 1 || g.Stats["reach.local"] != 3 {
+		t.Fatalf("reach: web=%s pve=%s stats=%v", web.Reach, pve.Reach, g.Stats)
+	}
+	if len(g.Networks) != 3 || g.Networks[0].ID != "10.0.0.0/24" || !slices.Equal(g.Networks[0].Devices, []int64{1, 2}) {
 		t.Fatalf("networks = %+v (link-local must be skipped)", g.Networks)
 	}
 }

@@ -126,3 +126,51 @@ func TestTTLAndActionValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestReachable(t *testing.T) {
+	levels := []string{"local", "tunnel", "internet"}
+	for i, want := range levels {
+		r, err := New("r", json.RawMessage(fmt.Sprintf(`{"rules":[{"name":"reachable","when":{"reachable":%q},"then":{"tier":"notify"}}]}`, want)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for j, got := range levels {
+			_, ok, err := r.Decide(context.Background(), decide.Situation{Device: decide.Device{Reach: got}})
+			if err != nil || ok != (j >= i) {
+				t.Errorf("want >= %s, device %s: %v %v", want, got, ok, err)
+			}
+		}
+	}
+	for _, invalid := range []string{"vpn", "Internet", "remote"} {
+		if _, err := New("r", json.RawMessage(fmt.Sprintf(`{"rules":[{"name":"r","when":{"reachable":%q},"then":{"tier":"notify"}}]}`, invalid))); err == nil {
+			t.Errorf("accepted %s", invalid)
+		}
+	}
+}
+
+func TestDefaultReachableKEV(t *testing.T) {
+	r, err := New("default", DefaultRules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, level := range []string{"local", "tunnel", "internet"} {
+		for _, exposed := range []bool{false, true} {
+			s := decide.Situation{Device: decide.Device{Reach: level, Exposed: exposed}, Vuln: intel.Vuln{KEV: true}}
+			p, ok, err := r.Decide(context.Background(), s)
+			if !ok || err != nil {
+				t.Fatal(p, ok, err)
+			}
+			if exposed {
+				reason := "rule kev-reachable"
+				if level == "local" {
+					reason = "rule kev-exposed"
+				}
+				if p.Reason != reason || p.Tier != decide.TierApprove || p.Action != "isolate" || p.TTL != 86400 {
+					t.Fatalf("%s: %+v", level, p)
+				}
+			} else if p.Tier != decide.TierNotify || p.Reason != "rule kev" {
+				t.Fatalf("unexposed %s: %+v", level, p)
+			}
+		}
+	}
+}

@@ -150,6 +150,8 @@ type DeviceRef struct {
 
 // DeviceRow is one line of the device list.
 type DeviceRow struct {
+	Attributes  map[string]string  `json:"-"` // reachability inputs, loaded with the inventory
+	Interfaces  []proto.Interface  `json:"-"`
 	Tags        []string           `json:"tags"`
 	ID          int64              `json:"id"`
 	Kind        string             `json:"kind"`

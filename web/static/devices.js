@@ -88,7 +88,8 @@ async function detail(root, id) {
 
   root.append(el("p", {}, el("a", { href: "#/devices" }, "← Devices")));
   root.append(el("div", { class: "card" },
-    el("h2", {}, d.name || `Device #${d.id}`, " ", kindPill(d.kind)),
+    el("h2", {}, d.name || `Device #${d.id}`, " ", kindPill(d.kind), " ", el("span", { class: "pill", title: "Reachability" }, d.reach || "local")),
+    el("ul", { class: "small muted" }, ...(d.reach_evidence || []).map((e) => el("li", {}, e))),
     el("div", { class: "row" }, nameInput, save),
     el("p", { class: "muted" },
       `First seen ${fmtTime(d.first_seen)} · last seen ${fmtTime(d.last_seen)}`,

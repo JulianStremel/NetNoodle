@@ -56,7 +56,11 @@ func (s *Server) decisionContext(ctx context.Context) (map[int64]GraphNode, erro
 	if e != nil {
 		return nil, e
 	}
-	g := buildGraph(devs, fs, nil, s.now())
+	svcs, e := s.st.ListAllServices(ctx)
+	if e != nil {
+		return nil, e
+	}
+	g := buildGraph(devs, fs, svcs, s.now())
 	out := map[int64]GraphNode{}
 	for _, n := range g.Nodes {
 		out[n.ID] = n
@@ -241,12 +245,13 @@ func (s *Server) startReevaluate() {
 }
 
 func findingSituation(d store.DeviceDetail, f store.FindingRow, n GraphNode) decide.Situation {
-	device := decide.Device{ID: d.ID, Name: d.Name, Kind: d.Kind, Tags: d.Tags, ParentID: d.ParentID, IPs: n.IPs}
+	device := decide.Device{ID: d.ID, Name: d.Name, Kind: d.Kind, Tags: d.Tags, ParentID: d.ParentID, IPs: n.IPs, Reach: reachLocal}
 	seenPorts := map[int]bool{}
 	seenListeners := map[string]bool{}
 	for _, svc := range d.Services {
 		if svc.Component == f.PURL && isExposed(svc.Address) {
 			device.Exposed = true
+			device.Reach = maxReach(device.Reach, listenerReach(svc.Address, deviceReach{level: n.Reach, routed: n.routed}))
 			if !seenPorts[svc.Port] {
 				device.Ports = append(device.Ports, svc.Port)
 				seenPorts[svc.Port] = true

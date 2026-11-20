@@ -336,7 +336,8 @@ func (s *DB) ListDevices(ctx context.Context) ([]store.DeviceRow, error) {
 			(SELECT COUNT(*) FROM services v WHERE v.device_id = d.id),
 			(SELECT COUNT(*) FROM findings f WHERE f.device_id = d.id AND f.state = 'open'),
 			(SELECT COALESCE(MAX(x.score), 0) FROM findings f JOIN vulns x ON x.id = f.vuln_id WHERE f.device_id = d.id AND f.state = 'open'),
-			(SELECT COUNT(*) FROM findings f JOIN vulns x ON x.id = f.vuln_id WHERE f.device_id = d.id AND f.state = 'open' AND x.kev = 1)
+			(SELECT COUNT(*) FROM findings f JOIN vulns x ON x.id = f.vuln_id WHERE f.device_id = d.id AND f.state = 'open' AND x.kev = 1),
+			d.attributes, d.interfaces
 		FROM devices d ORDER BY d.id`)
 	if err != nil {
 		return nil, err
@@ -346,11 +347,14 @@ func (s *DB) ListDevices(ctx context.Context) ([]store.DeviceRow, error) {
 	for rows.Next() {
 		var r store.DeviceRow
 		var first, last string
-		if err := rows.Scan(&r.ID, &r.Kind, &r.Name, &r.ParentID, &first, &last, &r.Components, &r.Services, &r.Findings, &r.MaxScore, &r.KEV); err != nil {
+		var attrs, ifaces string
+		if err := rows.Scan(&r.ID, &r.Kind, &r.Name, &r.ParentID, &first, &last, &r.Components, &r.Services, &r.Findings, &r.MaxScore, &r.KEV, &attrs, &ifaces); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		r.FirstSeen, r.LastSeen = parseTS(first), parseTS(last)
+		_ = json.Unmarshal([]byte(attrs), &r.Attributes)
+		_ = json.Unmarshal([]byte(ifaces), &r.Interfaces)
 		r.Identifiers = []proto.Identifier{}
 		r.Sources = []string{}
 		r.Tags = []string{}

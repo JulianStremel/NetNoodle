@@ -123,6 +123,11 @@ func QueryFor(c proto.Component) (Query, bool) {
 	distro := p.Qualifiers["distro"]
 	q := Query{Name: p.Name, Version: p.Version}
 	switch p.Type {
+	case "golang":
+		q.Ecosystem = "Go"
+		if p.Namespace != "" {
+			q.Name = p.Namespace + "/" + p.Name
+		}
 	case "deb":
 		// Debian and Ubuntu advisories name the source package.
 		if un, uv := p.Upstream(); un != "" {

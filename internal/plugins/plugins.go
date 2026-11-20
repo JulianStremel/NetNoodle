@@ -16,5 +16,6 @@ import (
 	_ "github.com/JulianStremel/netnoodle/internal/intel/osv"
 	_ "github.com/JulianStremel/netnoodle/internal/notify/webhook"
 	_ "github.com/JulianStremel/netnoodle/internal/source/proxmox"
+	_ "github.com/JulianStremel/netnoodle/internal/source/tailscale"
 	_ "github.com/JulianStremel/netnoodle/internal/source/unifi"
 )

@@ -185,7 +185,21 @@ func (s *Server) handleGetDevice(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "no such device")
 		return
 	}
-	writeJSON(w, http.StatusOK, d)
+	devs, err := s.st.ListDevices(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	row := store.DeviceRow{ID: d.ID, Name: d.Name, Attributes: d.Attributes, Interfaces: d.Interfaces}
+	for _, id := range d.IDs {
+		row.Identifiers = append(row.Identifiers, id.Identifier)
+	}
+	reach := classifyDevice(row, routedNetworks(devs))
+	writeJSON(w, http.StatusOK, struct {
+		store.DeviceDetail
+		Reach         string   `json:"reach"`
+		ReachEvidence []string `json:"reach_evidence"`
+	}{d, reach.level, reach.evidence})
 }
 
 func (s *Server) handleRenameDevice(w http.ResponseWriter, r *http.Request) {

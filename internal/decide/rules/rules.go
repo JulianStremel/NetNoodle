@@ -15,6 +15,7 @@ import (
 )
 
 type When struct {
+	Reachable      string   `json:"reachable"`
 	MinScore       *float64 `json:"min_score"`
 	MaxScore       *float64 `json:"max_score"`
 	KEV            *bool    `json:"kev"`
@@ -78,6 +79,9 @@ func New(name string, raw json.RawMessage) (decide.Decider, error) {
 			if _, e := netip.ParsePrefix(n); e != nil {
 				return nil, e
 			}
+		}
+		if r.When.Reachable != "" && !slices.Contains([]string{"local", "tunnel", "internet"}, r.When.Reachable) {
+			return nil, fmt.Errorf("%s: invalid reachable level", r.Name)
 		}
 		if r.When.Confidence != "" && r.When.Confidence != "high" && r.When.Confidence != "low" {
 			return nil, fmt.Errorf("invalid confidence")
@@ -148,6 +152,12 @@ func InNetworks(s decide.Situation, networks []string) bool {
 	return true
 }
 func matches(w When, s decide.Situation) bool {
+	if w.Reachable != "" {
+		rank := map[string]int{"local": 0, "tunnel": 1, "internet": 2}
+		if rank[s.Device.Reach] < rank[w.Reachable] {
+			return false
+		}
+	}
 	if w.MinScore != nil && s.Vuln.Score < *w.MinScore || w.MaxScore != nil && s.Vuln.Score > *w.MaxScore || w.KEV != nil && s.Vuln.KEV != *w.KEV || w.MinEPSS != nil && s.Vuln.EPSS < *w.MinEPSS || w.Exposed != nil && s.Device.Exposed != *w.Exposed || w.Confidence != "" && s.Confidence != w.Confidence || w.MinRelatedRisk != nil && s.RelatedRisk < *w.MinRelatedRisk {
 		return false
 	}
@@ -184,4 +194,6 @@ func (r *Rules) Decide(_ context.Context, s decide.Situation) (decide.Proposal, 
 	return decide.Proposal{}, false, nil
 }
 
-var DefaultRules = json.RawMessage(`{"rules":[{"name":"kev-exposed","when":{"kev":true,"exposed":true},"then":{"tier":"approve","action":"isolate","ttl":"24h"}},{"name":"critical-exposed","when":{"min_score":9,"exposed":true},"then":{"tier":"approve","action":"block-port","ttl":"24h"}},{"name":"kev","when":{"kev":true},"then":{"tier":"notify"}},{"name":"high","when":{"min_score":7},"then":{"tier":"notify"}}]}`)
+// VPN/internet KEV findings require approval only when the vulnerable
+// component has an exposed listener; a VPN interface alone is insufficient.
+var DefaultRules = json.RawMessage(`{"rules":[{"name":"kev-reachable","when":{"kev":true,"exposed":true,"reachable":"tunnel"},"then":{"tier":"approve","action":"isolate","ttl":"24h"}},{"name":"kev-exposed","when":{"kev":true,"exposed":true},"then":{"tier":"approve","action":"isolate","ttl":"24h"}},{"name":"critical-exposed","when":{"min_score":9,"exposed":true},"then":{"tier":"approve","action":"block-port","ttl":"24h"}},{"name":"kev","when":{"kev":true},"then":{"tier":"notify"}},{"name":"high","when":{"min_score":7},"then":{"tier":"notify"}}]}`)

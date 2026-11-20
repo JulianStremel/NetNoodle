@@ -18,6 +18,8 @@ func TestQueryFor(t *testing.T) {
 		want          Query
 		ok            bool
 	}{
+		{"pkg:golang/tailscale.com@v1.76.1", "ignored", Query{"Go", "tailscale.com", "v1.76.1"}, true},
+		{"pkg:golang/golang.org/x/net@v0.30.0", "", Query{"Go", "golang.org/x/net", "v0.30.0"}, true},
 		{"pkg:deb/debian/libssl3@3.0.11-1~deb12u2?arch=amd64&distro=debian-12&upstream=openssl", "",
 			Query{"Debian:12", "openssl", "3.0.11-1~deb12u2"}, true},
 		{"pkg:deb/debian/python3-six@1.16.0-4?distro=debian-12&upstream=six%401.16.0-3", "",
