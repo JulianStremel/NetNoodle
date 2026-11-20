@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["nn-proto", "nn-agent", "nn-actor-host"]
+members = ["nn-proto", "nn-agent"]
 
 [workspace.package]
 version = "0.1.0"

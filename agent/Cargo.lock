@@ -414,15 +414,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nn-actor-host"
-version = "0.1.0"
-dependencies = [
- "nn-proto",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "nn-agent"
 version = "0.1.0"
 dependencies = [

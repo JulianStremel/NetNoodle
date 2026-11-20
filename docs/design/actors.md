@@ -55,7 +55,7 @@ Order states: `queued` → `sent` → `done` | `failed` | `rejected` | `expired`
 | `nn-actor` (Go) | `log` | all (for tests) | all |
 | `nn-actor` (Go) | `unifi` | `isolate` (block the client), revert `unisolate` | `mac` |
 | `nn-actor` (Go) | `proxmox` | `snapshot`, `isolate` (guest firewall: drop all except the management network) | `proxmox.guest` |
-| `nn-actor-host` (Rust) | host | `block-port` (own nftables table `inet netnoodle`, rules with timeout), `stop-service` (only units in the allowlist) | `agent` |
+| `nn-actor` (Go) | `host` | `block-port` (own nftables table `inet netnoodle`, rules with timeout), `stop-service` (only units in the allowlist) | `agent` |
 
 Each actor has a local allowlist in its configuration: permitted actions, permitted targets (MAC prefixes, guest IDs, units), and a limit of orders per hour. The allowlist is the last protection if the server is compromised.
 
@@ -73,5 +73,5 @@ Each actor has a local allowlist in its configuration: permitted actions, permit
 
 1. Server: signing key, actor hello, orders table, planner, long poll, results, revert scheduler, Actions page columns. `nn-actor` with the `log` backend. End-to-end test.
 2. `unifi` backend (dry-run first).
-3. `nn-actor-host` (Rust): `block-port` with nftables.
+3. `host` backend of `nn-actor`: `block-port` with nftables (D-059: Go backend, so the order checks exist once).
 4. `proxmox` backend.

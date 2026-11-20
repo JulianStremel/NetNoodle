@@ -35,7 +35,7 @@ netnoodle does these tasks:
  others ───┘ ─────────────▶│   → inventory (device tree)      │
  in-process: unifi,        │ matchers → enrichers → findings  │   GET /v1/orders (pull)
    proxmox ───────────────▶│ deciders → guards → planner      │◀── nn-actor (Go): unifi, proxmox
-                           │   → orders and approvals         │◀── nn-actor-host (Rust)
+                           │   → orders and approvals         │◀── nn-actor on a host (backend host)
                            │ notifiers · web UI · SQLite      │◀── others
                            └──────────────────────────────────┘
 ```
@@ -147,7 +147,7 @@ Each device can have a parent. Example: a virtual machine has its hypervisor nod
 ### 3.7 Actors
 
 - `nn-actor` has backends: `unifi` (block a client) and `proxmox` (firewall rule, suspend, stop, snapshot).
-- `nn-actor-host` stops or starts allowlisted systemd units. It adds rules to its own nftables table.
+- The `host` backend of `nn-actor` adds entries with a time limit to its own nftables table. It can stop or start allowlisted systemd units (D-059).
 - The server reverses an action when its time limit ends. It also reverses an action when a new report shows a fixed version.
 
 ## 4. Plug-in contracts
@@ -166,7 +166,6 @@ The configuration has entries with the format `{"type": ..., "name": ..., "setti
 | `internal/actor` | `Backend` | Executes orders in `nn-actor`. |
 | `internal/store` | `Store` | Keeps the data. SQLite is the first implementation. |
 | `agent/nn-agent` | `Collector` (Rust trait) | Collects one type of data on a host. |
-| `agent/nn-actor-host` | `Action` (Rust trait) | Executes one type of action on a host. |
 
 To add a plug-in, do these steps:
 
@@ -197,5 +196,5 @@ The Go types are in `internal/proto`. The Rust types are in `agent/nn-proto`.
 | M3 | OSV, KEV and EPSS, findings page | Done |
 | M4 | `proxmox` source, `containers` collector, device tree, Map page, pull mode, MSRC matcher | Done. `qga` dropped: virtual machines run their own agent (D-050) |
 | M5 | `rules` decider, guards, approval queue, webhook notifier, device tags | Done (decisions are recorded; execution in M6) |
-| M6 | Actor protocol, signed orders, `nn-actor`, `nn-actor-host`, time limits | In progress: signed orders, planner, revert, `nn-actor` with `log` backend (dry run) done |
+| M6 | Actor protocol, signed orders, `nn-actor` with backends `log`, `unifi`, `proxmox`, `host`, time limits | In progress: signed orders, planner, revert, `nn-actor` with `log` backend (dry run) done |
 | M7 | `llm` decider | Not done |

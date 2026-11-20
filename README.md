@@ -18,11 +18,10 @@ Actions outside the automatic scope need the approval of an operator.
 |---|---|---|
 | `nn-server` | Go | Central server. Web interface, ingest, deduplication, threat matching, decisions, order queue. |
 | `nn-scan` | Go | Subnet scanner. Sends observations to the server. |
-| `nn-agent` | Rust | Agent on a Linux host. Collects packages, services and interfaces. Guests on hypervisors follow in M4. |
-| `nn-actor` | Go | Actor for network APIs (UniFi, Proxmox). (M6) |
-| `nn-actor-host` | Rust | Actor on a host (systemd units, firewall rules). (M6) |
+| `nn-agent` | Rust | Agent on a Linux or Windows host. Collects packages, services, interfaces and running containers. Can also be pulled by the server (pull mode). |
+| `nn-actor` | Go | Executes approved actions with signed orders. Backends: `log`, `unifi`, `proxmox`, `host` (nftables). Dry run by default. |
 
-All parts connect to the server. Agents and actors do not listen on a network port.
+All parts connect to the server. Only an agent in pull mode listens on a port.
 
 ## Tools that you must have
 
@@ -111,7 +110,7 @@ To start the scanner in a container, do these steps:
 
 > **Note:** In Git Bash on Windows, put `MSYS_NO_PATHCONV=1` before `docker compose` commands that have paths such as `/etc/netnoodle/...`.
 
-`nn-agent` and `nn-actor-host` do not operate in containers. They read and change the host. Install them on the host.
+`nn-agent` and `nn-actor` with the `host` backend do not operate in containers. They read and change the host. Install them on the host.
 
 ## Procedure: enroll a scanner
 
