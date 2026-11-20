@@ -1,0 +1,80 @@
+# Promote a release to the "stable" channel (docs/design/lifecycle.md section 2a, D-067).
+# The image tag "stable" gets the SAME digest as the release (no new build) and the git
+# branch "stable" is fast-forwarded to the release tag.
+name: promote
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release to promote, e.g. v1.4.2"
+        required: true
+      skip_wait:
+        description: "Promote before the 7-day waiting time (security fixes)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: promote
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    env:
+      VERSION: ${{ inputs.version }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: validate input
+        run: |
+          echo "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || { echo "version must be vX.Y.Z (no pre-release)"; exit 1; }
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - name: check release and waiting time
+        run: |
+          set -eu
+          info=$(gh release view "$VERSION" --json isPrerelease,isDraft,publishedAt)
+          [ "$(echo "$info" | jq -r .isPrerelease)" = false ] || { echo "pre-releases cannot be promoted"; exit 1; }
+          [ "$(echo "$info" | jq -r .isDraft)" = false ] || { echo "draft releases cannot be promoted"; exit 1; }
+          published=$(date -d "$(echo "$info" | jq -r .publishedAt)" +%s)
+          age_days=$(( ( $(date +%s) - published ) / 86400 ))
+          echo "release age: $age_days days"
+          if [ "$age_days" -lt 7 ] && [ "${{ inputs.skip_wait }}" != true ]; then
+            echo "release is younger than 7 days; set skip_wait for a security fix"; exit 1
+          fi
+      - name: fast-forward branch stable
+        run: |
+          set -eu
+          commit=$(git rev-parse "$VERSION^{commit}")
+          if git ls-remote --exit-code --heads origin stable >/dev/null; then
+            git fetch origin stable
+            git merge-base --is-ancestor origin/stable "$commit" || { echo "stable is not an ancestor of $VERSION (no downgrades)"; exit 1; }
+          fi
+          git push origin "$commit:refs/heads/stable"
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+      - uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: re-tag images (same digest)
+        run: |
+          set -eu
+          owner=${GITHUB_REPOSITORY_OWNER,,}
+          for t in server scan actor; do
+            img="ghcr.io/$owner/netnoodle-$t"
+            docker buildx imagetools create --tag "$img:stable" "$img:$VERSION"
+            docker buildx imagetools inspect "$img:stable" | head -3
+          done
+      - name: mark the release
+        run: |
+          body=$(gh release view "$VERSION" --json body -q .body)
+          printf '%s\n\n---\nPromoted to **stable** on %s.\n' "$body" "$(date -u +%Y-%m-%d)" > notes.md
+          gh release edit "$VERSION" --notes-file notes.md

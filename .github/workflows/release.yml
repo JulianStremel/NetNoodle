@@ -1,0 +1,207 @@
+# Release: runs on a version tag (vX.Y.Z, also vX.Y.Z-rc.1 for pre-releases).
+# Builds all binaries (docs/design/lifecycle.md section 5a), multi-arch images on GHCR,
+# SBOMs, Sigstore (keyless) signatures, and the GitHub release. Images get the tags
+# vX.Y.Z, vX.Y and latest; "stable" is set only by the promote workflow.
+name: release
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+", "v[0-9]+.[0-9]+.[0-9]+-*"]
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION_PKG: github.com/JulianStremel/netnoodle/internal/version
+
+jobs:
+  go-binaries:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
+          - { goos: windows, goarch: arm64 }
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+      - name: build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          out="dist/netnoodle_${TAG}_${GOOS}_${GOARCH}"
+          mkdir -p "$out"
+          ext=""; [ "$GOOS" = windows ] && ext=".exe"
+          progs="nn-scan nn-actor"
+          if [ "$GOOS" = linux ]; then
+            progs="$progs nn-server"
+            [ -d cmd/nn-host-updater ] && progs="$progs nn-host-updater"
+          fi
+          for p in $progs; do
+            go build -trimpath -ldflags "-s -w -X ${GO_VERSION_PKG}.Version=${TAG}" -o "$out/$p$ext" "./cmd/$p"
+          done
+          cp README.md "$out/"
+          [ "$GOOS" = linux ] && cp -r deploy "$out/"
+          cd dist
+          if [ "$GOOS" = windows ]; then zip -qr "$(basename "$out").zip" "$(basename "$out")"; else tar -czf "$(basename "$out").tar.gz" "$(basename "$out")"; fi
+          rm -rf "$(basename "$out")"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: go-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+          retention-days: 3
+
+  agent-linux:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [x86_64-unknown-linux-musl, aarch64-unknown-linux-musl]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --target ${{ matrix.target }} && rustup default stable
+          pip install --quiet ziglang==0.13.0
+          cargo install --locked cargo-zigbuild@0.19.8
+      - name: build
+        working-directory: agent
+        env:
+          NN_VERSION: ${{ github.ref_name }}
+        run: cargo zigbuild --locked --release --target ${{ matrix.target }} -p nn-agent
+      - name: package
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          arch=${{ matrix.target }}; arch=${arch%%-*}
+          out="dist/nn-agent_${TAG}_linux_${arch}"
+          mkdir -p "$out"
+          cp agent/target/${{ matrix.target }}/release/nn-agent agent/target/${{ matrix.target }}/release/nn-agent-helper "$out/"
+          cp deploy/nn-agent*.service deploy/nn-agent*.socket deploy/nn-agent.example.json "$out/" 2>/dev/null || true
+          tar -C dist -czf "$out.tar.gz" "$(basename "$out")" && rm -rf "$out"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: agent-linux-${{ matrix.target }}
+          path: dist/*
+          retention-days: 3
+
+  agent-windows:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        target: [x86_64-pc-windows-msvc, aarch64-pc-windows-msvc]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: toolchain
+        shell: pwsh
+        run: |
+          rustup toolchain install stable --profile minimal --target ${{ matrix.target }}
+          rustup default stable
+          # ring compiles C code; for ARM64 it needs clang (LLVM is on the runner image).
+          "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+      - name: build
+        working-directory: agent
+        env:
+          NN_VERSION: ${{ github.ref_name }}
+        run: cargo build --locked --release --target ${{ matrix.target }} -p nn-agent --bin nn-agent
+      - name: package
+        shell: pwsh
+        run: |
+          $arch = if ("${{ matrix.target }}".StartsWith("aarch64")) { "arm64" } else { "amd64" }
+          $out = "dist/nn-agent_${{ github.ref_name }}_windows_$arch"
+          New-Item -ItemType Directory -Force $out | Out-Null
+          Copy-Item "agent/target/${{ matrix.target }}/release/nn-agent.exe" $out
+          Copy-Item README.md $out
+          Compress-Archive -Path $out -DestinationPath "$out.zip"
+          Remove-Item -Recurse $out
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: agent-windows-${{ matrix.target }}
+          path: dist/*
+          retention-days: 3
+
+  images:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # keyless signing
+    strategy:
+      matrix:
+        target: [server, scan, actor]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: image name
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/netnoodle-${{ matrix.target }}" >> "$GITHUB_ENV"
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+      - uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@902fa8ec7d6ecbf8d84d538b9b233a880e428804 # v5.7.0
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern=v{{version}}
+            type=semver,pattern=v{{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+      - id: build
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: .
+          target: ${{ matrix.target }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: VERSION=${{ github.ref_name }}
+          sbom: true
+          provenance: mode=max
+      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
+      - name: sign
+        run: cosign sign --yes "${IMAGE}@${{ steps.build.outputs.digest }}"
+
+  release:
+    runs-on: ubuntu-latest
+    needs: [go-binaries, agent-linux, agent-windows, images]
+    permissions:
+      contents: write
+      id-token: write # keyless signing of the checksums
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: dist
+          merge-multiple: true
+      - name: source SBOM
+        uses: anchore/sbom-action@9246b90769f852b3a8921f330c59e0b3f439d6e9 # v0.20.1
+        with:
+          path: .
+          format: spdx-json
+          output-file: dist/netnoodle_${{ github.ref_name }}_source.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
+      - name: checksums and signature
+        working-directory: dist
+        run: |
+          sha256sum * > SHA256SUMS
+          cosign sign-blob --yes --bundle SHA256SUMS.sigstore.json SHA256SUMS
+      - name: create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          flags="--generate-notes --verify-tag"
+          case "$TAG" in *-*) flags="$flags --prerelease" ;; esac
+          gh release create "$TAG" dist/* $flags --title "netnoodle $TAG"
