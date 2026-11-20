@@ -112,7 +112,7 @@ func New(kind, name string, raw json.RawMessage) (Provider, error) {
 	} else {
 		endpoint += "/chat/completions"
 	}
-	return &provider{name: name, kind: kind, settings: s, timeout: timeout, endpoint: endpoint, client: &http.Client{CheckRedirect: tlspin.NoRedirects}}, nil
+	return &provider{name: name, kind: kind, settings: s, timeout: timeout, endpoint: endpoint, client: &http.Client{Transport: tlspin.Transport(), CheckRedirect: tlspin.NoRedirects}}, nil
 }
 
 func (p *provider) Name() string { return p.name }

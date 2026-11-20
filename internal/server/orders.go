@@ -85,7 +85,9 @@ func (s *Server) handleActorHello(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 503, "try again")
 		return
 	}
-	s.kickPlanner()
+	if !p.Provisional {
+		s.kickPlanner()
+	}
 	writeJSON(w, 200, map[string]string{"actor": p.Name})
 }
 func (s *Server) handleActorOrders(w http.ResponseWriter, r *http.Request) {

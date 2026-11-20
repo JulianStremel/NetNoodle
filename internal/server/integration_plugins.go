@@ -172,6 +172,9 @@ func (s *Server) reconcilePluginsLocked(rows []store.Integration) error {
 			p, err = buildPlugin(i)
 		}
 		if err != nil {
+			if config {
+				s.log.Warn("config integration failed to build", "kind", i.Kind, "type", i.Type, "name", i.Name)
+			}
 			a.errText = "Invalid settings; check required fields, URL and TLS settings."
 			return
 		}

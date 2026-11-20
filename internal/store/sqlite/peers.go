@@ -91,6 +91,12 @@ func (s *DB) Enroll(ctx context.Context, joinHash []byte, name string, tokenHash
 	if _, err := tx.ExecContext(ctx, `UPDATE onboarding SET peer_id=?,state='enrolled',updated=? WHERE join_id=? AND state='created' AND expires>?`, p.ID, ts(now), jid, ts(now)); err != nil {
 		return p, err
 	}
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM onboarding WHERE peer_id=? AND state='enrolled')`, p.ID).Scan(&p.Provisional); err != nil {
+		return p, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE peers SET provisional=? WHERE id=?`, p.Provisional, p.ID); err != nil {
+		return p, err
+	}
 	p.Name, p.Role, p.Created, p.LastSeen = name, role, now, now
 	return p, tx.Commit()
 }
@@ -100,7 +106,7 @@ func scanPeer(row interface{ Scan(...any) error }) (store.Peer, error) {
 	var created string
 	var last sql.NullString
 	var disabled int
-	err := row.Scan(&p.ID, &p.Name, &p.Role, &disabled, &created, &last, &p.Version)
+	err := row.Scan(&p.ID, &p.Name, &p.Role, &disabled, &created, &last, &p.Version, &p.Provisional)
 	if err != nil {
 		return p, notFound(err)
 	}
@@ -113,7 +119,7 @@ func scanPeer(row interface{ Scan(...any) error }) (store.Peer, error) {
 }
 
 func (s *DB) PeerByToken(ctx context.Context, hash []byte) (store.Peer, error) {
-	return scanPeer(s.db.QueryRowContext(ctx, `SELECT id, name, role, disabled, created_at, last_seen, version
+	return scanPeer(s.db.QueryRowContext(ctx, `SELECT id, name, role, disabled, created_at, last_seen, version, provisional
 		FROM peers WHERE token_hash = ?`, hash))
 }
 
@@ -123,7 +129,7 @@ func (s *DB) TouchPeer(ctx context.Context, id int64, now time.Time) error {
 }
 
 func (s *DB) ListPeers(ctx context.Context) ([]store.Peer, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, name, role, disabled, created_at, last_seen, version FROM peers ORDER BY name`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, name, role, disabled, created_at, last_seen, version, provisional FROM peers ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}

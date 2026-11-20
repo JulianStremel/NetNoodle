@@ -88,6 +88,13 @@ func (s *DB) AddOnboardStep(ctx context.Context, id string, step store.OnboardSt
 		if !step.OK || o.State != "connected" {
 			return store.ErrConflict
 		}
+		r, err := tx.ExecContext(ctx, `UPDATE peers SET provisional=0 WHERE id=? AND disabled=0`, o.PeerID)
+		if err != nil {
+			return err
+		}
+		if n, _ := r.RowsAffected(); n != 1 {
+			return store.ErrConflict
+		}
 		o.State = "done"
 	}
 	o.Steps = append(o.Steps, step)
@@ -105,11 +112,15 @@ func (s *DB) AddOnboardStep(ctx context.Context, id string, step store.OnboardSt
 // rollbackOnboard runs inside the same transaction as the state change.
 func rollbackOnboard(ctx context.Context, tx *sql.Tx, o store.OnboardSession, state, reason string, now time.Time) error {
 	if o.PeerID != 0 {
-		// An actor can have sent its first hello before the installer failed.
-		if _, err := tx.ExecContext(ctx, `DELETE FROM orders WHERE actor_peer_id=?`, o.PeerID); err != nil {
+		var count int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM orders WHERE actor_peer_id=?`, o.PeerID).Scan(&count); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM peers WHERE id=?`, o.PeerID); err != nil {
+		if count > 0 {
+			if _, err := tx.ExecContext(ctx, `UPDATE peers SET disabled=1,token_hash=randomblob(32) WHERE id=?`, o.PeerID); err != nil {
+				return err
+			}
+		} else if _, err := tx.ExecContext(ctx, `DELETE FROM peers WHERE id=?`, o.PeerID); err != nil {
 			return err
 		}
 	}

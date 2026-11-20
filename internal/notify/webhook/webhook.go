@@ -20,7 +20,7 @@ import (
 
 func init() {
 	notify.Registry.RegisterWithSchema("webhook", New, registry.Schema{Fields: []registry.Field{
-		{Key: "url", Label: "Webhook URL", Type: "url", Required: true},
+		{Key: "url", Label: "Webhook URL", Type: "secret", Required: true},
 		{Key: "headers_json", Label: "Headers (JSON object)", Type: "secret", Help: "Optional HTTP headers, for example an Authorization header. Leave empty to keep."},
 		{Key: "types", Label: "Event prefixes", Type: "list", Help: "Empty sends all events."},
 		{Key: "format", Label: "Format", Type: "string", Default: "json", Help: "json or slack."},
@@ -68,7 +68,7 @@ func New(name string, raw json.RawMessage) (notify.Notifier, error) {
 	if s.Format != "json" && s.Format != "slack" {
 		return nil, fmt.Errorf("unknown format %q", s.Format)
 	}
-	return &hook{name: name, s: s, c: &http.Client{Timeout: 10 * time.Second, CheckRedirect: tlspin.NoRedirects}}, nil
+	return &hook{name: name, s: s, c: &http.Client{Transport: tlspin.Transport(), Timeout: 10 * time.Second, CheckRedirect: tlspin.NoRedirects}}, nil
 }
 
 func (h *hook) Name() string { return h.name }

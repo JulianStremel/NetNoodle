@@ -59,7 +59,10 @@ func Client(fingerprint string, insecure bool, timeout time.Duration) (*http.Cli
 	if err != nil {
 		return nil, err
 	}
-	tr := &http.Transport{TLSClientConfig: cfg, Proxy: http.ProxyFromEnvironment, MaxIdleConns: 4, IdleConnTimeout: time.Minute}
+	tr := Transport()
+	tr.TLSClientConfig = cfg
+	tr.MaxIdleConns = 4
+	tr.IdleConnTimeout = time.Minute
 	// A pinned peer never needs a redirect. Following one could leave the
 	// pinned host or send credentials elsewhere.
 	return &http.Client{Transport: tr, Timeout: timeout, CheckRedirect: NoRedirects}, nil

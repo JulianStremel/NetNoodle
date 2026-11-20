@@ -1,6 +1,8 @@
 package installscripts
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"encoding/base64"
 	"fmt"
@@ -174,5 +176,118 @@ func TestPowerShellSyntax(t *testing.T) {
 	out, err := exec.Command(path, "-NoProfile", "-NonInteractive", "-Command", command).CombinedOutput()
 	if err != nil {
 		t.Fatalf("syntax: %v\n%s", err, out)
+	}
+}
+
+func TestBootstrapCannotBeReplaced(t *testing.T) {
+	runShell(t, `. "$1"
+server=https://genuine; spki=pin; fingerprint=cert
+if check_bootstrap; then exit 1; fi
+NN_EXPECTED_SERVER=$server; NN_EXPECTED_SPKI=$spki; NN_EXPECTED_FINGERPRINT=$fingerprint
+check_bootstrap
+server=https://attacker; if check_bootstrap; then exit 1; fi
+server=$NN_EXPECTED_SERVER; spki=attacker; if check_bootstrap; then exit 1; fi
+spki=$NN_EXPECTED_SPKI; fingerprint=attacker; if check_bootstrap; then exit 1; fi
+`)
+}
+
+func TestArchiveRequiresUniqueRegularMembers(t *testing.T) {
+	for _, kind := range []string{"regular", "missing-unit", "duplicate", "symlink", "duplicate-link", "hardlink"} {
+		t.Run(kind, func(t *testing.T) {
+			root := t.TempDir()
+			f, err := os.Create(filepath.Join(root, "release.tar.gz"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			gz := gzip.NewWriter(f)
+			tw := tar.NewWriter(gz)
+			add := func(name string, typ byte) {
+				t.Helper()
+				h := &tar.Header{Name: name, Typeflag: typ, Mode: 0755}
+				if typ == tar.TypeSymlink || typ == tar.TypeLink {
+					h.Linkname = "/outside"
+				}
+				if err := tw.WriteHeader(h); err != nil {
+					t.Fatal(err)
+				}
+			}
+			typ := byte(tar.TypeReg)
+			if kind == "symlink" {
+				typ = tar.TypeSymlink
+			}
+			if kind == "hardlink" {
+				typ = tar.TypeLink
+			}
+			add("package/nn-agent", typ)
+			if kind != "missing-unit" {
+				add("package/nn-agent.service", tar.TypeReg)
+			}
+			if kind == "duplicate" {
+				add("package/nn-agent", tar.TypeReg)
+			}
+			if kind == "duplicate-link" {
+				add("package/nn-agent", tar.TypeSymlink)
+			}
+			if err := tw.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := gz.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.Close(); err != nil {
+				t.Fatal(err)
+			}
+			expect := "bad"
+			if kind == "regular" {
+				expect = "ok"
+			}
+			runShell(t, `. "$1"; cd "$ROOT"; work=.; result=bad; if check_archive_members release.tar.gz package/nn-agent package/nn-agent.service; then result=ok; fi; [ "$result" = "$EXPECT" ]`, "ROOT="+filepath.ToSlash(root), "EXPECT="+expect)
+		})
+	}
+}
+
+func TestPowerShellBootstrapAndReparseSafety(t *testing.T) {
+	path, err := exec.LookPath("powershell")
+	if err != nil {
+		t.Skip("PowerShell unavailable")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	if out, err := exec.CommandContext(ctx, path, "-NoProfile", "-NonInteractive", "-Command", "exit 0").CombinedOutput(); err != nil {
+		t.Skipf("PowerShell cannot run: %v %s", err, out)
+	}
+	root := t.TempDir()
+	library, err := filepath.Abs("install.ps1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := `$ErrorActionPreference='Stop'
+$library=[IO.File]::ReadAllText($args[0]).Split(@('$Code = $env:NN_SETUP_CODE'),[StringSplitOptions]::None)[0]
+. ([scriptblock]::Create($library))
+$fields=@{server='https://genuine';spki='pin';fingerprint='cert'}
+Assert-Bootstrap $fields 'https://genuine' 'pin' 'cert'
+foreach ($values in @(@('','pin','cert'),@('https://attacker','pin','cert'),@('https://genuine','bad','cert'),@('https://genuine','pin','bad'))) {
+ $rejected=$false
+ try { Assert-Bootstrap $fields $values[0] $values[1] $values[2] } catch { $rejected=$true }
+ if (-not $rejected) { throw 'Bootstrap substitution accepted.' }
+}
+$outside=Join-Path $args[1] 'outside';$tree=Join-Path $args[1] 'tree'
+$null=New-Item -ItemType Directory -Path $outside,$tree
+$sentinel=Join-Path $outside 'keep';[IO.File]::WriteAllText($sentinel,'keep')
+$link=Join-Path $tree 'link'
+$null=New-Item -ItemType Junction -Path $link -Target $outside
+$rejected=$false
+try { Remove-SafeTree $tree } catch { $rejected=$true }
+if (-not $rejected -or -not [IO.File]::Exists($sentinel)) { throw 'Rollback followed a reparse point.' }
+[IO.Directory]::Delete($link,$false)
+Remove-SafeTree $tree
+if ([IO.Directory]::Exists($tree) -or -not [IO.File]::Exists($sentinel)) {throw 'Safe removal failed.'}
+`
+	file := filepath.Join(root, "security.ps1")
+	if err := os.WriteFile(file, []byte(script), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.CommandContext(ctx, path, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", file, library, root).CombinedOutput(); err != nil {
+		t.Fatalf("security helpers: %v\n%s", err, out)
 	}
 }

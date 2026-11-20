@@ -10,6 +10,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -22,7 +25,7 @@ import (
 )
 
 func TestOnboardConnectionHooks(t *testing.T) {
-	for _, kind := range []string{"agent", "actor-host", "agent-pull"} {
+	for _, kind := range []string{"agent", "scan", "actor-host", "agent-pull"} {
 		t.Run(kind, func(t *testing.T) {
 			ts, c, _, s := newTestServerS(t)
 			key, err := LoadOrCreateOrderKey(t.TempDir())
@@ -62,7 +65,7 @@ func TestOnboardConnectionHooks(t *testing.T) {
 				}
 				s.pullOne(t.Context(), pp)
 			} else {
-				path, body := "/v1/observations", `{"version":"v1","source":"ignored","entities":[{"kind":"host","name":"hook-peer"}]}`
+				path, body := "/v1/observations", `{"version":"v1","source":"ignored","entities":[{"kind":"host","name":"hook-peer","identifiers":[{"kind":"mac","value":"00:11:22:33:44:55","strength":"strong"}]}]}`
 				if kind == "actor-host" {
 					path, body = "/v1/actor/hello", `{"version":"v1","actor_version":"v1.2.3","capabilities":[]}`
 				}
@@ -73,6 +76,45 @@ func TestOnboardConnectionHooks(t *testing.T) {
 			saved, err := s.st.GetOnboard(t.Context(), o.ID)
 			if err != nil || saved.State != "connected" {
 				t.Fatalf("connection hook: %+v %v", saved, err)
+			}
+			peers, err := s.st.ListPeers(t.Context())
+			if err != nil || len(peers) != 1 || !peers[0].Provisional {
+				t.Fatalf("not provisional: %+v %v", peers, err)
+			}
+			devices, err := s.st.ListDevices(t.Context())
+			if err != nil || len(devices) != 0 {
+				t.Fatalf("provisional inventory ingested: %+v %v", devices, err)
+			}
+			actors, err := s.st.ListActors(t.Context())
+			if err != nil || len(actors) != 0 {
+				t.Fatalf("provisional planner actor: %+v %v", actors, err)
+			}
+			if kind == "actor-host" {
+				var orders []any
+				if code := doJSON(t, c, "GET", ts.URL+"/v1/orders?wait=0", peer.Token, "", &orders); code != 200 || len(orders) != 0 {
+					t.Fatalf("provisional orders: %d %+v", code, orders)
+				}
+			}
+			if code := onboardRequest(t, c, "POST", ts.URL+"/v1/onboard/"+o.ID+"/step", secret, `{"name":"done","ok":true}`, nil); code != 200 {
+				t.Fatal(code)
+			}
+			peers, err = s.st.ListPeers(t.Context())
+			if err != nil || len(peers) != 1 || peers[0].Provisional {
+				t.Fatalf("not promoted: %+v %v", peers, err)
+			}
+			if kind == "actor-host" {
+				actors, err = s.st.ListActors(t.Context())
+				if err != nil || len(actors) != 1 {
+					t.Fatalf("actor not promoted: %+v %v", actors, err)
+				}
+			} else if kind != "agent-pull" {
+				if code := doJSON(t, c, "POST", ts.URL+"/v1/observations", peer.Token, `{"version":"v1","entities":[{"kind":"host","name":"normal","identifiers":[{"kind":"mac","value":"00:11:22:33:44:55","strength":"strong"}]}]}`, nil); code != 200 {
+					t.Fatal(code)
+				}
+				devices, err = s.st.ListDevices(t.Context())
+				if err != nil || len(devices) != 1 {
+					t.Fatalf("normal inventory absent: %+v %v", devices, err)
+				}
 			}
 		})
 	}
@@ -267,6 +309,25 @@ func TestOnboardingAPI(t *testing.T) {
 	if _, err = s.st.Enroll(t.Context(), HashToken(b["token"]), "scan02", HashToken("new"), s.now(), nil); err != store.ErrNotFound {
 		t.Fatalf("cancel token: %v", err)
 	}
+	cancelled := create("scan-aborted", "scan", "linux")
+	if got := onboardRequest(t, c, "POST", ts.URL+"/v1/onboard/"+cancelled["session"]+"/abort", cancelled["secret"], `{"reason":"failed"}`, nil); got != 200 {
+		t.Fatal(got)
+	}
+	events, err := s.st.ListEvents(t.Context(), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, typ := range []string{"onboarding.created", "onboarding.cancelled", "onboarding.aborted", "onboarding.done"} {
+		found := false
+		for _, event := range events {
+			if event.Type == typ {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("missing %s event", typ)
+		}
+	}
 	// Expiry happens on reads even before the periodic job ticks.
 	d := create("scan03", "scan", "linux")
 	s.now = func() time.Time { return time.Now().Add(31 * time.Minute) }
@@ -371,7 +432,7 @@ func TestManifestRejectsMissingAndOversizedHashes(t *testing.T) {
 func TestInstallOneLinerPinsAndQuotes(t *testing.T) {
 	spki, fp := strings.Repeat("A", 43)+"=", strings.Repeat("a", 64)
 	linux := installOneLiner("https://server:7443", "linux", spki, fp)
-	if !strings.Contains(linux, "--pinnedpubkey 'sha256//"+spki+"'") || !strings.Contains(linux, "chmod 600") {
+	if !strings.Contains(linux, "--pinnedpubkey 'sha256//"+spki+"'") || !strings.Contains(linux, "sh -s --") || !strings.Contains(linux, "NN_EXPECTED_FINGERPRINT=") {
 		t.Fatalf("Linux bootstrap is not pinned/private: %s", linux)
 	}
 	windows := installOneLiner("https://server:7443", "windows", spki, fp)
@@ -382,5 +443,123 @@ func TestInstallOneLinerPinsAndQuotes(t *testing.T) {
 	}
 	if shellQuote("a'b") != `'a'"'"'b'` || powershellQuote("a'b") != `'a''b'` {
 		t.Fatal("bootstrap escaping lost a quote")
+	}
+}
+
+func TestManifestFailureCacheAndConcurrency(t *testing.T) {
+	_, _, _, s := newTestServerS(t)
+	var calls atomic.Int32
+	entered, release := make(chan struct{}), make(chan struct{})
+	fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			close(entered)
+		}
+		<-release
+		w.WriteHeader(503)
+	}))
+	defer fixture.Close()
+	s.SetInstallReleaseSource(fixture.URL, fixture.Client())
+	done := make(chan error, 1)
+	go func() { _, _, err := s.releaseHashes(t.Context(), "v1.2.3"); done <- err }()
+	<-entered
+	// A second lookup must fail promptly, without waiting on the fetch mutex.
+	second := make(chan error, 1)
+	go func() { _, _, err := s.releaseHashes(t.Context(), "v1.2.3"); second <- err }()
+	select {
+	case err := <-second:
+		if err == nil {
+			t.Error("inflight lookup succeeded")
+		}
+	case <-time.After(time.Second):
+		close(release)
+		t.Fatal("fetch held cache mutex")
+	}
+	close(release)
+	if err := <-done; err == nil {
+		t.Fatal("failed fetch succeeded")
+	}
+	for range 3 {
+		if _, _, err := s.releaseHashes(t.Context(), "v1.2.3"); err == nil {
+			t.Fatal("failed lookup succeeded")
+		}
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("failure not cached: %d", calls.Load())
+	}
+	s.onboard.mu.Lock()
+	s.onboard.failureUntil = time.Now().Add(-time.Second)
+	s.onboard.mu.Unlock()
+	if _, _, err := s.releaseHashes(t.Context(), "v1.2.3"); err == nil {
+		t.Fatal("failed retry succeeded")
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("failure cache did not expire: %d", calls.Load())
+	}
+}
+
+func TestManifestRateLimit(t *testing.T) {
+	_, _, _, s := newTestServerS(t)
+	for i := 0; i < 31; i++ {
+		req := httptest.NewRequest("GET", "https://server/v1/install/manifest?version=invalid", nil)
+		req.RemoteAddr = "192.0.2.1:1234"
+		w := httptest.NewRecorder()
+		s.handleInstallManifest(w, req)
+		want := 503
+		if i == 30 {
+			want = 429
+		}
+		if w.Code != want {
+			t.Fatalf("request %d: %d", i, w.Code)
+		}
+	}
+	req := httptest.NewRequest("GET", "https://server/v1/install/manifest", nil)
+	req.RemoteAddr = "192.0.2.2:1234"
+	w := httptest.NewRecorder()
+	s.handleInstallManifest(w, req)
+	if w.Code == 429 {
+		t.Fatal("different IP rate limited")
+	}
+}
+
+// Exercise Windows PowerShell's native argument marshalling, not just parsing:
+// quoted -Command strings silently lose C# double quotes on PowerShell 5.1.
+func TestWindowsOneLinerDeliversBootstrap(t *testing.T) {
+	ps, err := exec.LookPath("powershell")
+	if err != nil {
+		t.Skip("Windows PowerShell unavailable")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	if out, err := exec.CommandContext(ctx, ps, "-NoProfile", "-NonInteractive", "-Command", "exit 0").CombinedOutput(); err != nil {
+		t.Skipf("PowerShell cannot run: %v %s", err, out)
+	}
+	spki, fp := strings.Repeat("A", 43)+"=", strings.Repeat("a", 64)
+	one := installOneLiner("https://server:7443", "windows", spki, fp)
+	// This test runs without elevation and substitutes the network download. The
+	// certificate callback compilation and nested script-block call still run.
+	start, end := strings.Index(one, "if (-not "), strings.Index(one, "; $old=")
+	if start < 0 || end < start {
+		t.Fatal("bootstrap elevation guard missing")
+	}
+	one = one[:start] + one[end+2:]
+	root := t.TempDir()
+	output := filepath.Join(root, "bootstrap.txt")
+	stub := `param([string]$ExpectedServer,[string]$ExpectedSPKI,[string]$ExpectedFingerprint) [IO.File]::WriteAllText(` + powershellQuote(output) + `, $ExpectedServer+'|'+$ExpectedSPKI+'|'+$ExpectedFingerprint)`
+	download := `(New-Object Net.WebClient).DownloadString('https://server:7443/install.ps1')`
+	if !strings.Contains(one, download) {
+		t.Fatal("download fixture not substituted")
+	}
+	one = strings.Replace(one, download, powershellQuote(stub), 1)
+	file := filepath.Join(root, "bootstrap.ps1")
+	if err := os.WriteFile(file, []byte(one), 0600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.CommandContext(ctx, ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", file).CombinedOutput()
+	if err != nil {
+		t.Fatalf("bootstrap execution: %v\n%s", err, out)
+	}
+	got, err := os.ReadFile(output)
+	if err != nil || string(got) != "https://server:7443|"+spki+"|"+fp {
+		t.Fatalf("bootstrap parameters: %s %v\n%s", got, err, out)
 	}
 }

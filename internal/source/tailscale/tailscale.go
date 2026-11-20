@@ -21,6 +21,7 @@ import (
 	"github.com/JulianStremel/netnoodle/internal/proto"
 	"github.com/JulianStremel/netnoodle/internal/registry"
 	"github.com/JulianStremel/netnoodle/internal/source"
+	"github.com/JulianStremel/netnoodle/internal/tlspin"
 )
 
 func init() {
@@ -87,7 +88,7 @@ func New(name string, raw json.RawMessage) (source.Source, error) {
 			return nil, errors.New("tailscale: invalid include_tags")
 		}
 	}
-	c := &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	c := &http.Client{Transport: tlspin.Transport(), Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	return &Source{name: name, s: s, c: c}, nil
 }
 

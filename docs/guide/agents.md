@@ -8,16 +8,18 @@ Collect data: the subnet scanner, the agent on Linux and Windows, the helpers, a
 
 1. Open **Peers**. Use **Add peer**.
 2. Select the kind and platform. Enter a name and your password.
-3. Copy the command. Run it on the device.
+3. Copy the command. Run it on the device (Windows: open PowerShell as Administrator first).
 4. At the prompt, paste the setup code. The code is valid for 30 minutes. Keep it private.
 5. Enter the local settings that the script asks for. API secrets stay on the device.
 6. Wait for **Done** on the Peers page. The script checks the service and the connection to the server.
 
 Linux needs systemd. Windows supports the agent and scanner. Actors start with `dry_run: true` and an empty action list. Set the local policy before you use an actor.
 
-For automation, pass `--code <setup-code>` and `--yes`. `--yes` refuses prompts that still need local settings or secrets; it also refuses to repair an existing install without a person confirming it. Prefer the interactive setup-code prompt on shared devices so the code stays out of command histories and process arguments. For pull agents, enter the server-reachable address as `host:port`, without an HTTPS prefix.
+The server is fully trusted for installs: it supplies the privileged installer and the release manifest. Release integrity rests on GitHub TLS plus SHA256SUMS, without independent Sigstore verification. The command binds the setup code to the expected server origin and both TLS pins; a code from another server is refused. Windows currently enforces the requested SYSTEM/Administrators-only owner rule on all ancestors; it refuses TrustedInstaller-owned standard paths too. Do not change Windows system-directory ownership to bypass this check.
 
-If the install fails, the script removes its files and service. The server removes the peer. To remove an install later, run the script with `--uninstall <name>` as an administrator. This removes the local install. Disable the peer on the Peers page if you no longer use it.
+For automation, provide `NN_SETUP_CODE` in a protected privileged environment and use `--yes`. `--code` is refused: a value on the command line can enter shell history, process listings and logs. Prefer the hidden interactive prompt; do not log setup codes or environment secrets. `--yes` refuses prompts for local settings/secrets and repair confirmation. Preserve the bootstrap values from the generated command. For pull agents, enter the server-reachable address as `host:port`, without an HTTPS prefix.
+
+If the install fails, the script removes its files and service. Until Done, the peer is provisional: connectivity is checked without ingesting inventory or delivering actor orders. On failure the server removes peers without orders, or retains them disabled with a revoked token if orders exist. To remove an install later, run the script with `--uninstall <name>` as an administrator. This removes the local install. Disable the peer on the Peers page if you no longer use it.
 
 ## Procedure: enroll a scanner
 

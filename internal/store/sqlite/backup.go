@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/JulianStremel/netnoodle/internal/store"
+	"github.com/JulianStremel/netnoodle/internal/tlspin"
 )
 
 var _ store.Backuper = (*DB)(nil)
@@ -38,8 +40,48 @@ func (s *DB) ExportBackup(ctx context.Context, destination string) error {
 		if _, err := db.ExecContext(ctx, `PRAGMA secure_delete=ON`); err != nil {
 			return err
 		}
-		if _, err := db.ExecContext(ctx, `UPDATE integrations SET secrets_json='{}',enabled=0,last_error=''`); err != nil {
+		if _, err := db.ExecContext(ctx, `UPDATE integrations SET secrets_json='{}',settings_json=json_remove(settings_json,'$.url','$.base_url','$.broker'),enabled=0,last_error=''`); err != nil {
 			return err
+		}
+		rows, err := db.QueryContext(ctx, `SELECT id,settings_json FROM integrations`)
+		if err != nil {
+			return err
+		}
+		type cleanRow struct {
+			id  int64
+			raw []byte
+		}
+		var clean []cleanRow
+		for rows.Next() {
+			var id int64
+			var raw []byte
+			if err := rows.Scan(&id, &raw); err != nil {
+				rows.Close()
+				return err
+			}
+			var settings map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &settings); err != nil {
+				rows.Close()
+				return err
+			}
+			for key, value := range settings {
+				var v string
+				if json.Unmarshal(value, &v) == nil && tlspin.CredentialURL(v) {
+					delete(settings, key)
+				}
+			}
+			b, _ := json.Marshal(settings)
+			clean = append(clean, cleanRow{id, b})
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		for _, row := range clean {
+			if _, err := db.ExecContext(ctx, `UPDATE integrations SET settings_json=? WHERE id=?`, string(row.raw), row.id); err != nil {
+				return err
+			}
 		}
 		if _, err := db.ExecContext(ctx, `VACUUM`); err != nil {
 			return err

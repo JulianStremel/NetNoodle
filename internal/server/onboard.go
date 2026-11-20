@@ -22,6 +22,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/JulianStremel/netnoodle/internal/installscripts"
+	"github.com/JulianStremel/netnoodle/internal/notify"
 	"github.com/JulianStremel/netnoodle/internal/pull"
 	"github.com/JulianStremel/netnoodle/internal/store"
 	"github.com/JulianStremel/netnoodle/internal/version"
@@ -33,10 +34,13 @@ var releaseTag = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)
 var sessionID = regexp.MustCompile(`^[A-Za-z0-9-]{16,80}$`)
 
 type onboardState struct {
-	mu     sync.Mutex
-	base   string
-	client *http.Client
-	hashes map[string]map[string]string
+	mu           sync.Mutex
+	base         string
+	client       *http.Client
+	hashes       map[string]map[string]string
+	fetching     bool
+	failureUntil time.Time
+	rate         *rateLimiter
 }
 
 func newOnboardState() *onboardState {
@@ -45,7 +49,7 @@ func newOnboardState() *onboardState {
 			return fmt.Errorf("unsafe release redirect")
 		}
 		return nil
-	}}, hashes: make(map[string]map[string]string)}
+	}}, hashes: make(map[string]map[string]string), rate: newRateLimiter(30, time.Minute)}
 }
 
 // SetInstallReleaseSource permits a local release fixture in tests. Production
@@ -56,6 +60,7 @@ func (s *Server) SetInstallReleaseSource(base string, client *http.Client) {
 	s.onboard.base = strings.TrimRight(base, "/")
 	s.onboard.client = client
 	s.onboard.hashes = make(map[string]map[string]string)
+	s.onboard.failureUntil = time.Time{}
 }
 
 var setupKeys = []string{"server", "fingerprint", "spki", "session", "secret", "token", "name", "kind", "version", "expires"}
@@ -130,10 +135,11 @@ func shellQuote(s string) string      { return "'" + strings.ReplaceAll(s, "'", 
 func powershellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
 func installOneLiner(server, platform, spki, fp string) string {
 	if platform == "linux" {
-		return `f=$(mktemp) && chmod 600 "$f" && curl -fsSLk --pinnedpubkey ` + shellQuote("sha256//"+spki) + ` ` + shellQuote(server+"/install.sh") + ` -o "$f" && sh "$f"; r=$?; rm -f "$f"; (exit "$r")`
+		return `curl -fsSLk --proto '=https' --pinnedpubkey ` + shellQuote("sha256//"+spki) + ` ` + shellQuote(server+"/install.sh") + ` | sudo NN_EXPECTED_SERVER=` + shellQuote(server) + ` NN_EXPECTED_SPKI=` + shellQuote(spki) + ` NN_EXPECTED_FINGERPRINT=` + shellQuote(fp) + ` /bin/sh -s --`
 	}
-	callback := `public static class NNBootstrapPin { public static string Expected; public static bool Check(object sender, System.Security.Cryptography.X509Certificates.X509Certificate cert, System.Security.Cryptography.X509Certificates.X509Chain chain, System.Net.Security.SslPolicyErrors errors) { if(cert==null) return false; using(var hash=System.Security.Cryptography.SHA256.Create()) { return System.String.Equals(System.BitConverter.ToString(hash.ComputeHash(cert.GetRawCertData())).Replace("-", ""), Expected, System.StringComparison.OrdinalIgnoreCase); } } }`
-	return `$f=Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString('N')+'.ps1'); $old=[Net.ServicePointManager]::ServerCertificateValidationCallback; $protocol=[Net.ServicePointManager]::SecurityProtocol; try { if (-not ('NNBootstrapPin' -as [type])) { Add-Type -TypeDefinition ` + powershellQuote(callback) + ` }; [NNBootstrapPin]::Expected=` + powershellQuote(fp) + `; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; [Net.ServicePointManager]::ServerCertificateValidationCallback=[Net.Security.RemoteCertificateValidationCallback][NNBootstrapPin]::Check; (New-Object Net.WebClient).DownloadFile(` + powershellQuote(server+"/install.ps1") + `,$f); & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $f } finally { [Net.ServicePointManager]::ServerCertificateValidationCallback=$old; [Net.ServicePointManager]::SecurityProtocol=$protocol; Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }`
+	callback := `public static class NNBootstrapPin { public static string Expected; public static readonly System.Net.Security.RemoteCertificateValidationCallback Callback = Check; public static bool Check(object sender, System.Security.Cryptography.X509Certificates.X509Certificate cert, System.Security.Cryptography.X509Certificates.X509Chain chain, System.Net.Security.SslPolicyErrors errors) { if(cert==null) return false; using(var hash=System.Security.Cryptography.SHA256.Create()) { return System.String.Equals(System.BitConverter.ToString(hash.ComputeHash(cert.GetRawCertData())).Replace("-", ""), Expected, System.StringComparison.OrdinalIgnoreCase); } } }`
+	command := `$ErrorActionPreference='Stop'; if (-not (New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Open PowerShell as Administrator first.' }; $old=[Net.ServicePointManager]::ServerCertificateValidationCallback; $protocol=[Net.ServicePointManager]::SecurityProtocol; try { Add-Type -TypeDefinition ` + powershellQuote(callback) + `; [NNBootstrapPin]::Expected=` + powershellQuote(fp) + `; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; [Net.ServicePointManager]::ServerCertificateValidationCallback=[NNBootstrapPin]::Callback; $script=(New-Object Net.WebClient).DownloadString(` + powershellQuote(server+"/install.ps1") + `); & ([scriptblock]::Create($script)) -ExpectedServer ` + powershellQuote(server) + ` -ExpectedSPKI ` + powershellQuote(spki) + ` -ExpectedFingerprint ` + powershellQuote(fp) + ` } finally { [Net.ServicePointManager]::ServerCertificateValidationCallback=$old; [Net.ServicePointManager]::SecurityProtocol=$protocol }`
+	return `& "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command { ` + command + ` }`
 }
 func (s *Server) handleCreateOnboard(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -176,6 +182,7 @@ func (s *Server) handleCreateOnboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	code := encodeSetup(map[string]string{"server": u.String(), "fingerprint": s.fingerprint, "spki": spki, "session": o.ID, "secret": secret, "token": token, "name": o.Name, "kind": o.Kind, "version": version.Version, "expires": o.Expires.UTC().Format(time.RFC3339)})
+	s.onboardEvent(r.Context(), "created", o)
 	writeJSON(w, 200, map[string]any{"session": o.ID, "setup_code": code, "one_liner": installOneLiner(u.String(), o.Platform, spki, s.fingerprint), "expires": o.Expires})
 }
 func (s *Server) onboardSession(w http.ResponseWriter, r *http.Request, script bool) (store.OnboardSession, bool) {
@@ -254,6 +261,13 @@ func (s *Server) abortOnboard(w http.ResponseWriter, r *http.Request, script boo
 		writeErr(w, 409, "cannot abort this session")
 		return
 	}
+	if o.State != "aborted" && o.State != "expired" {
+		event := "cancelled"
+		if script {
+			event = "aborted"
+		}
+		s.onboardEvent(r.Context(), event, o)
+	}
 	writeJSON(w, 200, map[string]string{"state": "aborted"})
 }
 func (s *Server) handleOnboardStep(w http.ResponseWriter, r *http.Request) {
@@ -298,7 +312,15 @@ func (s *Server) handleOnboardStep(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 409, "cannot record step")
 		return
 	}
+	if step.Name == "done" {
+		s.onboardEvent(r.Context(), "done", o)
+		s.kickPlanner()
+		s.kickPull()
+	}
 	writeJSON(w, 200, map[string]string{})
+}
+func (s *Server) onboardEvent(ctx context.Context, state string, o store.OnboardSession) {
+	s.emit(ctx, notify.Event{Type: "onboarding." + state, Severity: "info", Title: "Onboarding " + state + ": " + o.Name, Link: "#/peers"}, o.Name, `{}`)
 }
 func (s *Server) handleInstallScript(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
@@ -355,16 +377,32 @@ func releaseAsset(tag, platform, kind string) (string, []string, error) {
 }
 func (s *Server) releaseHashes(ctx context.Context, tag string) (map[string]string, string, error) {
 	s.onboard.mu.Lock()
-	defer s.onboard.mu.Unlock()
 	base := s.onboard.base + "/" + tag + "/"
 	if h := s.onboard.hashes[tag]; h != nil {
+		s.onboard.mu.Unlock()
 		return h, base, nil
 	}
+	if s.onboard.fetching || time.Now().Before(s.onboard.failureUntil) {
+		s.onboard.mu.Unlock()
+		return nil, "", fmt.Errorf("checksums temporarily unavailable")
+	}
+	s.onboard.fetching = true
+	client := s.onboard.client
+	s.onboard.mu.Unlock()
+	success := false
+	defer func() {
+		s.onboard.mu.Lock()
+		s.onboard.fetching = false
+		if !success {
+			s.onboard.failureUntil = time.Now().Add(5 * time.Second)
+		}
+		s.onboard.mu.Unlock()
+	}()
 	req, err := http.NewRequestWithContext(ctx, "GET", base+"SHA256SUMS", nil)
 	if err != nil {
 		return nil, "", err
 	}
-	res, err := s.onboard.client.Do(req)
+	res, err := client.Do(req)
 	if err != nil {
 		return nil, "", err
 	}
@@ -392,10 +430,17 @@ func (s *Server) releaseHashes(ctx context.Context, tag string) (map[string]stri
 		}
 		hashes[name] = strings.ToLower(f[0])
 	}
+	s.onboard.mu.Lock()
 	s.onboard.hashes[tag] = hashes
+	s.onboard.mu.Unlock()
+	success = true
 	return hashes, base, nil
 }
 func (s *Server) handleInstallManifest(w http.ResponseWriter, r *http.Request) {
+	if !s.onboard.rate.allow(clientIP(r), s.now()) {
+		writeErr(w, 429, "too many manifest requests")
+		return
+	}
 	if len(r.URL.RawQuery) > 512 {
 		writeErr(w, 400, "manifest query too large")
 		return

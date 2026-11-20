@@ -99,7 +99,7 @@ func New(name string, raw json.RawMessage) (intel.Matcher, error) {
 		base:    strings.TrimRight(s.URL, "/"),
 		ttl:     ttl,
 		conc:    s.Concurrency,
-		hc:      &http.Client{Timeout: 60 * time.Second, CheckRedirect: tlspin.NoRedirects},
+		hc:      &http.Client{Transport: tlspin.Transport(), Timeout: 60 * time.Second, CheckRedirect: tlspin.NoRedirects},
 		now:     time.Now,
 		queries: map[Query]queryEntry{},
 		vulns:   map[string]vulnEntry{},

@@ -1,4 +1,5 @@
 # netnoodle installer for Windows PowerShell 5.1. Agent and scanner only.
+param([string]$ExpectedServer, [string]$ExpectedSPKI, [string]$ExpectedFingerprint)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2
 
@@ -35,8 +36,13 @@ function Read-SetupCode([string]$Value) {
     return $fields
 }
 
+function Assert-Bootstrap($Fields, [string]$Server, [string]$SPKI, [string]$Fingerprint) {
+    if (-not $Server -or -not $SPKI -or -not $Fingerprint -or $Fields.server -cne $Server -or $Fields.spki -cne $SPKI -or $Fields.fingerprint -cne $Fingerprint) { throw 'Setup code does not match bootstrap trust values.' }
+}
+
 function Private-Path([string]$Path, [bool]$Directory) {
     $acl = if ($Directory) { New-Object Security.AccessControl.DirectorySecurity } else { New-Object Security.AccessControl.FileSecurity }
+    $acl.SetOwner((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')))
     $acl.SetAccessRuleProtection($true, $false)
     foreach ($sid in @('S-1-5-18','S-1-5-32-544')) {
         $identity = New-Object Security.Principal.SecurityIdentifier($sid)
@@ -47,14 +53,60 @@ function Private-Path([string]$Path, [bool]$Directory) {
     }
     Set-Acl -LiteralPath $Path -AclObject $acl
 }
+# Check each existing component before changing ACLs or creating children.
+function Assert-TrustedPath([string]$Path) {
+    $leaf = [IO.Path]::GetFullPath($Path)
+    $current = $leaf
+    # Our own directory must be owned by SYSTEM or Administrators. System
+    # parents (C:\, C:\Program Files, C:\ProgramData) may also be owned by
+    # TrustedInstaller, which ordinary users cannot become.
+    $trustedInstaller = 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'
+    while ($current) {
+        if (Test-Path -LiteralPath $current) {
+            $item = Get-Item -LiteralPath $current -Force
+            if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Install paths must not contain reparse points.' }
+            $owner = (Get-Acl -LiteralPath $current).GetOwner([Security.Principal.SecurityIdentifier]).Value
+            $allowed = @('S-1-5-18','S-1-5-32-544')
+            if ($current -ne $leaf) { $allowed += $trustedInstaller }
+            if ($owner -notin $allowed) { throw "Untrusted install path owner: $current" }
+        }
+        $parent = [IO.Directory]::GetParent($current)
+        $current = if ($parent) { $parent.FullName } else { $null }
+    }
+}
+function New-TrustedDirectory([string]$Path) {
+    Assert-TrustedPath $Path
+    if (-not (Test-Path -LiteralPath $Path)) { $null = New-Item -ItemType Directory -Path $Path }
+    Assert-TrustedPath $Path
+    Private-Path $Path $true
+}
+function Allow-Service([string]$Path, [string]$Rights) {
+    $acl = Get-Acl -LiteralPath $Path
+    $sid = New-Object Security.Principal.SecurityIdentifier('S-1-5-19')
+    $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid,$Rights,'ContainerInherit,ObjectInherit','None','Allow')))
+    Set-Acl -LiteralPath $Path -AclObject $acl
+}
 function Protect-InstallRoot {
-    if ((Get-Item -LiteralPath $script:InstallRoot).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Install root must not be a link.' }
+    Assert-TrustedPath $script:InstallRoot
     Private-Path $script:InstallRoot $true
-    $acl = Get-Acl -LiteralPath $script:InstallRoot
-    $localService = New-Object Security.Principal.SecurityIdentifier('S-1-5-19')
-    $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($localService,'ReadAndExecute','Allow')))
-    Set-Acl -LiteralPath $script:InstallRoot -AclObject $acl
-    if ((Test-Path -LiteralPath $script:Journal) -and ((Get-Item -LiteralPath $script:Journal).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Journal must not be a link.' }
+    Allow-Service $script:InstallRoot 'ReadAndExecute'
+    if (Test-Path -LiteralPath $script:Journal) { Assert-TrustedPath $script:Journal }
+}
+# Refuse trees containing links; never invoke recursive deletion on them.
+function Assert-NoLinks([string]$Path) {
+    $item = Get-Item -LiteralPath $Path -Force
+    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Refusing to remove a reparse point.' }
+    if ($item.PSIsContainer) {
+        foreach ($child in Get-ChildItem -LiteralPath $Path -Force) { Assert-NoLinks $child.FullName }
+    }
+}
+function Remove-SafeTree([string]$Path) {
+    Assert-NoLinks $Path
+    $item = Get-Item -LiteralPath $Path -Force
+    if ($item.PSIsContainer) {
+        foreach ($child in Get-ChildItem -LiteralPath $Path -Force) { Remove-SafeTree $child.FullName }
+        [IO.Directory]::Delete($Path, $false)
+    } else { [IO.File]::Delete($Path) }
 }
 function Record-Resource([string]$Type, [string]$Target) {
     [IO.File]::AppendAllText($script:Journal, "$Type|$Target`n", (New-Object Text.UTF8Encoding($false)))
@@ -81,8 +133,9 @@ function Remove-Install {
             } elseif ($pair[0] -eq 'file' -or $pair[0] -eq 'dir') {
                 $resolved = [IO.Path]::GetFullPath($pair[1])
                 $prefix = [IO.Path]::GetFullPath($script:InstallRoot).TrimEnd('\') + '\'
-                if (-not $resolved.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) { throw 'Journal path leaves the install root.' }
-                if (Test-Path -LiteralPath $resolved) { Remove-Item -LiteralPath $resolved -Recurse -Force }
+                $binaryPrefix = [IO.Path]::GetFullPath($script:BinaryRoot).TrimEnd('\') + '\'
+                if (-not ($resolved.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) -or $resolved.StartsWith($binaryPrefix, [StringComparison]::OrdinalIgnoreCase))) { throw 'Journal path leaves the install root.' }
+                if (Test-Path -LiteralPath $resolved) { Assert-TrustedPath ([IO.Path]::GetDirectoryName($resolved)); Remove-SafeTree $resolved }
             } else { throw 'Unknown journal entry.' }
         } catch { $bad = $true; Write-Warning "Rollback failed for a journal entry: $($_.Exception.Message)" }
     }
@@ -129,17 +182,10 @@ function Ask-Input([string]$Prompt) {
     if (-not $answer -or $answer.Length -gt 16384) { throw 'Input is empty or too large.' }
     return $answer
 }
-function Quote-Argument([string]$Value) {
-    # Windows doubles backslashes before a quote, and before the closing quote.
-    $escaped = [regex]::Replace($Value, '(\\*)"', '$1$1\"')
-    $escaped = [regex]::Replace($escaped, '(\\+)$', '$1$1')
-    return '"' + $escaped + '"'
-}
-
-$Code = ''; $script:Yes = $false; $Uninstall = ''
+$Code = $env:NN_SETUP_CODE; Remove-Item Env:NN_SETUP_CODE -ErrorAction SilentlyContinue; $script:Yes = $false; $Uninstall = ''
 for ($i=0; $i -lt $args.Count; $i++) {
     switch ($args[$i]) {
-        { $_ -in @('--code','-Code') } { $i++; if ($i -ge $args.Count) { throw '--code needs a value' }; $Code = $args[$i] }
+        { $_ -in @('--code','-Code') } { throw '--code is unsafe; use NN_SETUP_CODE or hidden interactive input.' }
         { $_ -in @('--yes','-Yes') } { $script:Yes = $true }
         { $_ -in @('--uninstall','-Uninstall') } { $i++; if ($i -ge $args.Count) { throw '--uninstall needs a name' }; $Uninstall = $args[$i] }
         default { throw 'Unknown installer option.' }
@@ -148,25 +194,37 @@ for ($i=0; $i -lt $args.Count; $i++) {
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = New-Object Security.Principal.WindowsPrincipal($identity)
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    # Quote each argument for the Windows command line. Codes contain no quotes.
-    $forward = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$PSCommandPath) + $args
-    $quoted = @($forward | ForEach-Object { Quote-Argument $_ })
-    # The elevated installer needs a visible console for setup-code prompts.
-    $child = Start-Process -FilePath powershell.exe -Verb RunAs -WindowStyle Normal -ArgumentList $quoted -Wait -PassThru
-    exit $child.ExitCode
+    throw 'Open PowerShell as Administrator first; this installer does not elevate itself.'
 }
 if ([Environment]::OSVersion.Platform -ne 'Win32NT') { throw 'This installer needs Windows.' }
 $arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
 $platform = switch ($arch) { 'AMD64' { 'windows-x86_64' } 'ARM64' { 'windows-arm64' } default { throw 'Supported architectures: x86_64 and arm64.' } }
-$script:InstallRoot = Join-Path $env:ProgramData 'netnoodle\install'
+$dataRoot = Join-Path $env:ProgramData 'netnoodle'
+$script:InstallRoot = Join-Path $dataRoot 'install'
+$script:BinaryRoot = Join-Path $env:ProgramFiles 'netnoodle'
+Assert-TrustedPath $script:InstallRoot
+Assert-TrustedPath $script:BinaryRoot
 if ($Uninstall) {
     if ($Uninstall -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$') { throw 'Invalid name.' }
     $script:Journal = Join-Path $script:InstallRoot "$Uninstall.journal"
     if (Test-Path -LiteralPath $script:InstallRoot) { Protect-InstallRoot; Remove-Install }
     exit
 }
-if (-not $Code) { $Code = Ask-Input 'Paste the setup code' }
+if (-not $ExpectedServer -or -not $ExpectedSPKI -or -not $ExpectedFingerprint) { throw 'Missing bootstrap trust values; use the pinned one-liner.' }
+if (-not $Code) {
+    if ($script:Yes) { throw 'NN_SETUP_CODE is required with --yes.' }
+    $secureCode = Read-Host 'Paste the setup code' -AsSecureString
+    $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureCode)
+    try { $Code = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr); $secureCode.Dispose() }
+}
 $script:Setup = Read-SetupCode $Code
+Assert-Bootstrap $script:Setup $ExpectedServer $ExpectedSPKI $ExpectedFingerprint
+New-TrustedDirectory $dataRoot
+Allow-Service $dataRoot 'ReadAndExecute'
+New-TrustedDirectory $script:InstallRoot
+Allow-Service $script:InstallRoot 'ReadAndExecute'
+New-TrustedDirectory $script:BinaryRoot
+Allow-Service $script:BinaryRoot 'ReadAndExecute'
 $Code = $null
 
 # Use a CLR callback so TLS validation does not depend on a PowerShell runspace
@@ -179,6 +237,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 public static class NNInstallPin {
     public static string Expected;
+    public static readonly RemoteCertificateValidationCallback Callback = Check;
     public static bool Check(object sender, X509Certificate cert, X509Chain chain, SslPolicyErrors errors) {
         if (cert == null) return false;
         using (SHA256 hash = SHA256.Create()) {
@@ -189,12 +248,12 @@ public static class NNInstallPin {
 '@
 $oldCallback = [Net.ServicePointManager]::ServerCertificateValidationCallback
 $oldProtocol = [Net.ServicePointManager]::SecurityProtocol
-$pinCallback = [Net.Security.RemoteCertificateValidationCallback][NNInstallPin]::Check
+$pinCallback = [NNInstallPin]::Callback
 [NNInstallPin]::Expected = $script:Setup.fingerprint
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 [Net.ServicePointManager]::ServerCertificateValidationCallback = $pinCallback
 $armed = $false; $success = $false; $journalActive = $false; $stage = 'preflight'
-$work = Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString('N'))
+$work = Join-Path $script:InstallRoot ([Guid]::NewGuid().ToString('N'))
 $null = New-Item -ItemType Directory -Path $work
 Private-Path $work $true
 try {
@@ -260,7 +319,15 @@ try {
     Record-Resource 'dir' $homePath
     $null = New-Item -ItemType Directory -Path $homePath
     $binaryName = if ($script:Setup.kind -eq 'agent') { 'nn-agent.exe' } else { 'nn-scan.exe' }
-    $binary = Join-Path $homePath $binaryName
+    Private-Path $homePath $true
+    $statePath = Join-Path $homePath 'state'
+    Record-Resource 'dir' $statePath
+    New-TrustedDirectory $statePath
+    $binaryHome = Join-Path $script:BinaryRoot $script:Setup.name
+    if (Test-Path -LiteralPath $binaryHome) { throw 'Binary directory already exists.' }
+    Record-Resource 'dir' $binaryHome
+    New-TrustedDirectory $binaryHome
+    $binary = Join-Path $binaryHome $binaryName
     New-InstallFile $binary
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $zip = [IO.Compression.ZipFile]::OpenRead($archive)
@@ -286,6 +353,7 @@ try {
         if ($script:Setup.kind -eq 'agent') { Run-Program $binary @('--config',$config,'--creds',$creds,'enroll','--server',$script:Setup.server,'--fingerprint',$script:Setup.fingerprint,'--name',$script:Setup.name) }
         else { Run-Program $binary @('enroll','-server',$script:Setup.server,'-fingerprint',$script:Setup.fingerprint,'-name',$script:Setup.name,'-creds',$creds) }
     } finally { Remove-Item Env:NN_JOIN_TOKEN -ErrorAction SilentlyContinue; $script:Setup.token = '' }
+    Run-Program $binary @('--version')
     Report-Step 'enrolled'
     $stage = 'service'
     $taskName = 'nn-' + $script:Setup.name
@@ -296,14 +364,12 @@ try {
     $taskSettings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
     # LOCAL SERVICE has no admin rights. Permit it to read credentials and write
     # only this installation's runtime state, with no permissions for Users.
-    $localService = New-Object Security.Principal.SecurityIdentifier('S-1-5-19')
-    $acl = Get-Acl -LiteralPath $homePath
-    $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($localService,'Modify','ContainerInherit,ObjectInherit','None','Allow')))
-    Set-Acl -LiteralPath $homePath -AclObject $acl
+    Allow-Service $homePath 'ReadAndExecute'
+    Allow-Service $binaryHome 'ReadAndExecute'
+    Allow-Service $statePath 'Modify'
     Record-Resource 'task' $taskName
     $null = Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $taskSettings -User 'NT AUTHORITY\LOCAL SERVICE' -RunLevel Limited
     Start-ScheduledTask -TaskName $taskName
-    Run-Program $binary @('--version')
     Report-Step 'service'
     $stage = 'communication'
     $deadline = [DateTime]::UtcNow.AddSeconds(120)
@@ -337,8 +403,8 @@ try {
     [Net.ServicePointManager]::SecurityProtocol = $oldProtocol
     if (Test-Path -LiteralPath $work) {
         $resolvedWork = [IO.Path]::GetFullPath($work)
-        $tempPrefix = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
-        if ($resolvedWork.StartsWith($tempPrefix,[StringComparison]::OrdinalIgnoreCase)) { Remove-Item -LiteralPath $resolvedWork -Recurse -Force }
+        $workPrefix = [IO.Path]::GetFullPath($script:InstallRoot).TrimEnd('\') + '\'
+        if ($resolvedWork.StartsWith($workPrefix,[StringComparison]::OrdinalIgnoreCase)) { Remove-SafeTree $resolvedWork }
     }
 }
 if (-not $success) { exit 1 }

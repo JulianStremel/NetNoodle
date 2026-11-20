@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -48,7 +49,7 @@ func TestAllIntegrationKindsAPI(t *testing.T) {
 	ts, c, pw, s := newTestServerS(t)
 	doJSON(t, c, "POST", ts.URL+"/api/login", "", fmt.Sprintf(`{"user":"admin","password":%q}`, pw), nil)
 	var sent atomic.Int32
-	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	remote := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/hook":
 			if r.Header.Get("X-Key") != integrationTestSecret {
@@ -97,6 +98,13 @@ func TestAllIntegrationKindsAPI(t *testing.T) {
 		}
 	}))
 	defer remote.Close()
+	originalTransport := http.DefaultTransport
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = remote.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
+	transport.TLSClientConfig.RootCAs = x509.NewCertPool()
+	transport.TLSClientConfig.RootCAs.AddCert(remote.Certificate())
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport; transport.CloseIdleConnections() })
 	cases := []struct {
 		kind, typ string
 		settings  map[string]any
@@ -104,8 +112,8 @@ func TestAllIntegrationKindsAPI(t *testing.T) {
 		testOK    bool
 	}{
 		{"source", integrationTestType, map[string]any{"mode": "ok"}, map[string]string{"key": integrationTestSecret}, true},
-		{"notify", "webhook", map[string]any{"url": remote.URL + "/hook", "types": []string{"device."}}, map[string]string{"headers_json": `{"X-Key":"` + integrationTestSecret + `"}`}, true},
-		{"notify", "mqtt", map[string]any{"broker": "mqtt://127.0.0.1:1"}, map[string]string{"password": integrationTestSecret}, false},
+		{"notify", "webhook", map[string]any{"types": []string{"device."}}, map[string]string{"url": remote.URL + "/hook", "headers_json": `{"X-Key":"` + integrationTestSecret + `"}`}, true},
+		{"notify", "mqtt", map[string]any{"broker": "mqtts://127.0.0.1:1"}, map[string]string{"password": integrationTestSecret}, false},
 		{"intel", "secret-test", map[string]any{}, map[string]string{"key": integrationTestSecret}, false},
 		{"intel", "osv", map[string]any{"url": remote.URL, "concurrency": 2}, nil, true},
 		{"intel", "msrc", map[string]any{"url": remote.URL, "months": 1}, nil, true},
@@ -182,7 +190,7 @@ func TestNotificationAndIntelReload(t *testing.T) {
 	ts, c, pw, s := newTestServerS(t)
 	doJSON(t, c, "POST", ts.URL+"/api/login", "", fmt.Sprintf(`{"user":"admin","password":%q}`, pw), nil)
 	events := make(chan string, 16)
-	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	remote := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/hook") {
 			events <- r.URL.Path
 			return
@@ -190,6 +198,13 @@ func TestNotificationAndIntelReload(t *testing.T) {
 		fmt.Fprint(w, `{"vulnerabilities":[{"cveID":"`+strings.TrimPrefix(r.URL.Path, "/")+`"}]}`)
 	}))
 	defer remote.Close()
+	originalTransport := http.DefaultTransport
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = remote.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
+	transport.TLSClientConfig.RootCAs = x509.NewCertPool()
+	transport.TLSClientConfig.RootCAs.AddCert(remote.Certificate())
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport; transport.CloseIdleConnections() })
 	s.cfg.Notifiers = []registry.Spec{{Type: "webhook", Name: "file-hook", Settings: json.RawMessage(`{"url":"` + remote.URL + `/hook-config"}`)}}
 	s.cfg.Enrichers = []registry.Spec{{Type: "kev", Name: "file-kev", Settings: json.RawMessage(`{"url":"` + remote.URL + `/CVE-config"}`)}}
 	ctx, cancel := context.WithCancel(t.Context())
@@ -211,6 +226,10 @@ func TestNotificationAndIntelReload(t *testing.T) {
 			typ, endpoint = "kev", "/CVE-first"
 		}
 		body := map[string]any{"kind": kind, "type": typ, "name": "live-" + typ, "settings": map[string]any{"url": remote.URL + endpoint}, "password": pw}
+		if kind == "notify" {
+			body["settings"] = map[string]any{}
+			body["secrets"] = map[string]string{"url": remote.URL + endpoint}
+		}
 		var saved struct{ ID int64 }
 		json.Unmarshal(call("POST", "", body), &saved)
 		path := fmt.Sprintf("/%d", saved.ID)
@@ -262,6 +281,12 @@ func TestNotificationAndIntelReload(t *testing.T) {
 			endpoint = "/CVE-second"
 		}
 		body["settings"] = map[string]any{"url": remote.URL + endpoint}
+		if kind == "notify" {
+			body["settings"] = map[string]any{}
+			body["secrets"] = map[string]string{"url": remote.URL + endpoint}
+		} else {
+			body["secrets"] = map[string]string{"url": remote.URL + endpoint}
+		}
 		call("PUT", path, body)
 		verify(endpoint)
 		call("POST", path+"/disable", map[string]string{"password": pw})
@@ -402,7 +427,7 @@ func TestManagedMQTTLifecycle(t *testing.T) {
 	if err := s.RunSources(ctx, nil); err != nil {
 		t.Fatal(err)
 	}
-	body := map[string]any{"kind": "notify", "type": "mqtt", "name": "managed-mqtt", "settings": map[string]any{"broker": "mqtt://127.0.0.1:1"}, "password": pw}
+	body := map[string]any{"kind": "notify", "type": "mqtt", "name": "managed-mqtt", "settings": map[string]any{"broker": "mqtts://127.0.0.1:1"}, "password": pw}
 	code, b := integrationCall(t, c, "POST", ts.URL+"/api/integrations", body)
 	if code != 200 {
 		t.Fatal(code, string(b))
@@ -419,7 +444,7 @@ func TestManagedMQTTLifecycle(t *testing.T) {
 	if first == nil || first.cancel == nil || len(s.notifierSnapshot()) != 1 {
 		t.Fatal("publisher not started")
 	}
-	body["settings"] = map[string]any{"broker": "mqtt://127.0.0.1:1", "topic_prefix": "changed"}
+	body["settings"] = map[string]any{"broker": "mqtts://127.0.0.1:1", "topic_prefix": "changed"}
 	code, b = integrationCall(t, c, "PUT", path, body)
 	if code != 200 {
 		t.Fatal(code, string(b))

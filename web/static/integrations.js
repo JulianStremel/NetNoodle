@@ -52,7 +52,7 @@ registerView("integrations", "Integrations", async (root) => {
       const secretSet = row?.secrets?.[field.key]?.set;
       const attrs = { required: field.required && !secretSet, "aria-label": field.label };
       const input = field.type === "list" ? el("textarea", attrs) : el("input", {
-        ...attrs, type: field.type === "bool" ? "checkbox" : field.type === "secret" ? "password" : field.type === "url" ? "url" : field.type === "int" ? "number" : "text",
+        ...attrs, type: field.type === "bool" ? "checkbox" : (field.type === "secret" || secretSet) ? "password" : field.type === "url" ? "url" : field.type === "int" ? "number" : "text",
         min: field.type === "int" ? 1 : undefined,
         step: field.type === "int" ? 1 : undefined,
         autocomplete: field.type === "secret" ? "new-password" : undefined,
@@ -61,7 +61,7 @@ registerView("integrations", "Integrations", async (root) => {
       const value = row?.settings?.[field.key] ?? field.default;
       if (field.type === "bool") input.checked = Boolean(value);
       else if (field.type === "list") input.value = (value || []).join("\n");
-      else input.value = field.type === "secret" ? "" : value ?? "";
+      else input.value = (field.type === "secret" || secretSet) ? "" : value ?? "";
       input.addEventListener("input", () => {
         invalidate();
         if (field.type === "url" || field.type === "fingerprint") { pendingPin = null; certificate.hidden = true; }
@@ -74,7 +74,7 @@ registerView("integrations", "Integrations", async (root) => {
     const payload = () => {
       const settings = {}, secrets = {};
       for (const [key, { field, input }] of controls) {
-        if (field.type === "secret") secrets[key] = input.value;
+        if (field.type === "secret" || row?.secrets?.[key]?.set) secrets[key] = input.value;
         else if (field.type === "bool") settings[key] = input.checked;
         else if (field.type === "int") settings[key] = Number(input.value);
         else if (field.type === "list") settings[key] = input.value.split("\n").map(v => v.trim()).filter(Boolean);
@@ -130,7 +130,7 @@ registerView("integrations", "Integrations", async (root) => {
     const form = el("form", { class: "card integration-editor" },
       el("h2", {}, `${row ? "Edit" : "Add"} integration: ${schema.type}`),
       schema.kind === "llm" ? el("p", {}, "Saved for the future M7 advisor. This provider does not make decisions or start actions. The test sends only Reply with OK.") : null,
-      el("p", { class: "muted" }, "Settings → confirm certificate if needed → test connection → save"), fields,
+      el("p", { class: "muted" }, "Changing an endpoint or fingerprint requires re-entering all credentials. Settings → confirm certificate if needed → test connection → save"), fields,
       fetchPin, certificate, test, status,
       el("label", {}, "Administrator password (to save)", password), save, " ", button("Cancel", close, true), message);
     form.addEventListener("submit", async (ev) => {

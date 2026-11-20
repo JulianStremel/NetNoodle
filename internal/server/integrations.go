@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -89,7 +90,7 @@ func publicIntegration(i store.Integration, config bool) integrationView {
 	_ = json.Unmarshal(i.Secrets, &secrets)
 	schema, _ := integrationSchema(i.Kind, i.Type)
 	for _, f := range schema.Fields {
-		if f.Type == "secret" {
+		if f.Type == "secret" || secrets[f.Key] != "" {
 			set := secrets[f.Key] != ""
 			if config {
 				var direct, file string
@@ -102,7 +103,13 @@ func publicIntegration(i store.Integration, config bool) integrationView {
 			}
 			v.Secrets[f.Key] = secretFlag{set}
 		} else if b, ok := settings[f.Key]; ok {
-			v.Settings[f.Key] = b
+			var raw string
+			_ = json.Unmarshal(b, &raw)
+			if integrationURLField(f) && tlspin.CredentialURL(raw) {
+				v.Secrets[f.Key] = secretFlag{true}
+			} else {
+				v.Settings[f.Key] = b
+			}
 		}
 	}
 	if i.LastError != "" {
@@ -182,9 +189,13 @@ type integrationRequest struct {
 	Password string                     `json:"password,omitempty"`
 }
 
+func integrationURLField(f registry.Field) bool {
+	return f.Type == "url" || f.Key == "url" || f.Key == "base_url"
+}
+
 // prepareIntegration admits only schema keys and moves secrets into a separate
 // object. File paths and source TLS bypasses remain config-file-only settings.
-func prepareIntegration(req integrationRequest, old *store.Integration) (store.Integration, error) {
+func prepareIntegration(req integrationRequest, old *store.Integration, allowEndpointReuse ...bool) (store.Integration, error) {
 	kind := req.Kind
 	if kind == "" {
 		if old != nil {
@@ -218,11 +229,9 @@ func prepareIntegration(req integrationRequest, old *store.Integration) (store.I
 	settings := map[string]json.RawMessage{}
 	secrets := map[string]string{}
 	if old != nil {
-		_ = json.Unmarshal(old.Secrets, &secrets)
-		if secrets == nil {
-			secrets = map[string]string{}
-		}
+		secrets = storedIntegrationSecrets(*old)
 	}
+
 	for key := range req.Settings {
 		f, ok := fields[key]
 		if !ok || f.Type == "secret" {
@@ -231,7 +240,7 @@ func prepareIntegration(req integrationRequest, old *store.Integration) (store.I
 	}
 	for key, value := range req.Secrets {
 		f, ok := fields[key]
-		if !ok || f.Type != "secret" {
+		if !ok || (f.Type != "secret" && !integrationURLField(f)) {
 			return i, errors.New("secrets contain an unsupported field")
 		}
 		if value != "" {
@@ -240,12 +249,21 @@ func prepareIntegration(req integrationRequest, old *store.Integration) (store.I
 	}
 	for _, f := range schema.Fields {
 		if f.Type == "secret" {
+			if f.Key == "url" || f.Key == "base_url" {
+				if err := tlspin.CheckURL(secrets[f.Key], false); err != nil || !strings.HasPrefix(secrets[f.Key], "https://") {
+					return i, errors.New("HTTPS endpoint required")
+				}
+			}
 			if f.Required && strings.TrimSpace(secrets[f.Key]) == "" {
 				return i, fmt.Errorf("%s is required", f.Label)
 			}
 			continue
 		}
 		b, exists := req.Settings[f.Key]
+		if integrationURLField(f) && (!exists || string(b) == `""`) && secrets[f.Key] != "" {
+			b, _ = json.Marshal(secrets[f.Key])
+			exists = true
+		}
 		if !exists && f.Default != nil {
 			b, _ = json.Marshal(f.Default)
 			exists = true
@@ -287,18 +305,95 @@ func prepareIntegration(req integrationRequest, old *store.Integration) (store.I
 				_, err := tlspin.Parse(value)
 				valid = err == nil
 			}
-			if valid && f.Type == "url" {
-				valid = tlspin.CheckURL(value, false) == nil
+			if valid && integrationURLField(f) {
+				valid = tlspin.CheckURL(value, false) == nil && strings.HasPrefix(value, "https://")
 			}
 		}
 		if !valid {
 			return i, fmt.Errorf("invalid %s", f.Label)
 		}
+		if integrationURLField(f) {
+			var raw string
+			_ = json.Unmarshal(b, &raw)
+			if tlspin.CredentialURL(raw) {
+				secrets[f.Key] = raw
+				continue
+			}
+			delete(secrets, f.Key)
+		}
+		if f.Key == "broker" {
+			var broker string
+			_ = json.Unmarshal(b, &broker)
+			if !strings.HasPrefix(broker, "mqtts://") {
+				return i, errors.New("MQTT TLS required")
+			}
+		}
 		settings[f.Key] = b
 	}
 	i.Settings, _ = json.Marshal(settings)
 	i.Secrets, _ = json.Marshal(secrets)
+	if old != nil && integrationEndpointChanged(*old, i) && (len(allowEndpointReuse) == 0 || !allowEndpointReuse[0]) {
+		saved := storedIntegrationSecrets(*old)
+		for key, value := range saved {
+			var submitted string
+			if fields[key].Type != "secret" && integrationURLField(fields[key]) {
+				_ = json.Unmarshal(req.Settings[key], &submitted)
+			}
+			if value != "" && req.Secrets[key] == "" && submitted == "" {
+				return i, errors.New("endpoint changed; enter all stored secrets again")
+			}
+		}
+	}
 	return i, nil
+}
+
+// Older rows may still carry credential URLs among settings. Preserve their
+// write-only behavior while they are migrated into secrets on the next save.
+func storedIntegrationSecrets(i store.Integration) map[string]string {
+	secrets := map[string]string{}
+	_ = json.Unmarshal(i.Secrets, &secrets)
+	if secrets == nil {
+		secrets = map[string]string{}
+	}
+	var settings map[string]json.RawMessage
+	_ = json.Unmarshal(i.Settings, &settings)
+	schema, _ := integrationSchema(i.Kind, i.Type)
+	for _, f := range schema.Fields {
+		var raw string
+		_ = json.Unmarshal(settings[f.Key], &raw)
+		if secrets[f.Key] == "" && raw != "" && (f.Type == "secret" || (integrationURLField(f) && tlspin.CredentialURL(raw))) {
+			secrets[f.Key] = raw
+		}
+	}
+	return secrets
+}
+
+// Compare effective endpoints, including write-only webhook URLs and defaults.
+func integrationEndpointChanged(old, next store.Integration) bool {
+	a, _ := integrationSettings(old)
+	b, _ := integrationSettings(next)
+	var before, after map[string]json.RawMessage
+	_ = json.Unmarshal(a, &before)
+	_ = json.Unmarshal(b, &after)
+	schema, _ := integrationSchema(next.Kind, next.Type)
+	for _, f := range schema.Fields {
+		if f.Type != "url" && f.Type != "fingerprint" && f.Key != "url" && f.Key != "fingerprint" && f.Key != "broker" && f.Key != "base_url" {
+			continue
+		}
+		var x, y any
+		_ = json.Unmarshal(before[f.Key], &x)
+		_ = json.Unmarshal(after[f.Key], &y)
+		if x == nil && f.Default != nil {
+			x = f.Default
+		}
+		if y == nil && f.Default != nil {
+			y = f.Default
+		}
+		if !reflect.DeepEqual(x, y) {
+			return true
+		}
+	}
+	return false
 }
 
 func integrationAPIError(w http.ResponseWriter, err error) {
@@ -429,6 +524,13 @@ func (s *Server) handleIntegrationProbe(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, 400, "invalid probe request")
 		return
 	}
+	select {
+	case s.integrations.testSlots <- struct{}{}:
+	default:
+		writeErr(w, 429, "too many probes or tests")
+		return
+	}
+	defer func() { <-s.integrations.testSlots }()
 	ctx, cancel := context.WithTimeout(r.Context(), integrationProbeTimeout)
 	defer cancel()
 	fp, subject, err := probeIntegration(ctx, req.URL)
@@ -451,7 +553,7 @@ func probeIntegration(ctx context.Context, raw string) (string, string, error) {
 	if port == "" {
 		port = "443"
 	}
-	dialer := tls.Dialer{NetDialer: &net.Dialer{Timeout: integrationProbeTimeout}, Config: &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: true}} // operator must compare and confirm the returned pin
+	dialer := tls.Dialer{NetDialer: &net.Dialer{Timeout: integrationProbeTimeout, Control: tlspin.SafeControl}, Config: &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: true}} // operator must compare and confirm the returned pin
 	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(u.Hostname(), port))
 	if err != nil {
 		return "", "", errors.New("TLS handshake failed")
@@ -476,7 +578,7 @@ func probeIntegration(ctx context.Context, raw string) (string, string, error) {
 
 func (s *Server) handleIntegrationTest(w http.ResponseWriter, r *http.Request) {
 	var req integrationRequest
-	if readJSON(r, &req) != nil {
+	if readJSON(r, &req) != nil || len(req.Password) > 1024 {
 		writeErr(w, 400, "invalid test request")
 		return
 	}
@@ -495,7 +597,14 @@ func (s *Server) handleIntegrationTest(w http.ResponseWriter, r *http.Request) {
 	if req.Name == "" {
 		req.Name = "connection-test"
 	}
-	i, err := prepareIntegration(req, old)
+	reuse := false
+	if req.Password != "" {
+		if !s.updateStepUp(w, r, req.Password) {
+			return
+		}
+		reuse = true
+	}
+	i, err := prepareIntegration(req, old, reuse)
 	if err != nil {
 		writeErr(w, 400, err.Error())
 		return

@@ -31,7 +31,7 @@ func (s *DB) ListActors(ctx context.Context) ([]store.ActorCaps, error) {
 	}
 	out := []store.ActorCaps{}
 	for _, p := range ps {
-		if p.Role != store.RoleActor {
+		if p.Role != store.RoleActor || p.Provisional {
 			continue
 		}
 		a := store.ActorCaps{Peer: p, Capabilities: []proto.Capability{}}
@@ -236,7 +236,7 @@ func (s *DB) SendOrders(ctx context.Context, peer int64, now time.Time, revertsO
 		return nil, e
 	}
 	defer tx.Rollback()
-	rows, e := tx.QueryContext(ctx, `SELECT payload,sig FROM orders WHERE (revert=1 OR ?=0) AND actor_peer_id=? AND state='queued' AND not_after>? AND (revert=1 OR (SELECT value FROM settings WHERE key='decide.killswitch')='off') ORDER BY created_at,id LIMIT 64`, revertsOnly, peer, ts(now))
+	rows, e := tx.QueryContext(ctx, `SELECT payload,sig FROM orders WHERE EXISTS(SELECT 1 FROM peers WHERE peers.id=orders.actor_peer_id AND disabled=0 AND provisional=0) AND (revert=1 OR ?=0) AND actor_peer_id=? AND state='queued' AND not_after>? AND (revert=1 OR (SELECT value FROM settings WHERE key='decide.killswitch')='off') ORDER BY created_at,id LIMIT 64`, revertsOnly, peer, ts(now))
 	if e != nil {
 		return nil, e
 	}

@@ -129,6 +129,9 @@ func (s *Server) reconcileIntegrationsLocked(ctx context.Context) error {
 			}
 		}
 		if err != nil {
+			if config {
+				s.log.Warn("config integration failed to build", "kind", i.Kind, "type", i.Type, "name", i.Name)
+			}
 			w.lastError = "Invalid settings; check required fields, URL and TLS settings."
 			return
 		}

@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -106,5 +107,64 @@ func TestOnboardDoesNotOwnReusedIDs(t *testing.T) {
 	var uses int
 	if err = db.db.QueryRow(`SELECT uses_left FROM join_tokens WHERE id=?`, newJoin).Scan(&uses); err != nil || uses != 1 {
 		t.Fatalf("new token: %d %v", uses, err)
+	}
+}
+
+// Orders may exist from an older server. Rollback must preserve every state,
+// revoke access and retain the peer for audit and uncertainty/revert handling.
+func TestOnboardRollbackPreservesOrders(t *testing.T) {
+	for _, expire := range []bool{false, true} {
+		for _, state := range []string{"queued", "sent", "done", "uncertain"} {
+			t.Run(fmt.Sprintf("expiry=%v/%s", expire, state), func(t *testing.T) {
+				db := open(t)
+				ctx := t.Context()
+				now := time.Now().UTC()
+				o := store.OnboardSession{ID: "order-session", Name: "order-actor", Kind: "actor-host", Platform: "linux", SecretHash: make([]byte, 32), Expires: now.Add(time.Minute)}
+				if err := db.CreateOnboard(ctx, o, []byte("join"), store.RoleActor, now); err != nil {
+					t.Fatal(err)
+				}
+				peer, err := db.Enroll(ctx, []byte("join"), o.Name, []byte("token"), now, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !peer.Provisional {
+					t.Fatal("not provisional")
+				}
+				dev := decideDevice(t, db)
+				proposal, _, err := db.UpsertProposal(ctx, store.Proposal{DeviceID: dev, VulnID: "test", Action: "isolate", Tier: "auto", State: "auto", CreatedAt: now})
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, err = db.db.Exec(`INSERT INTO orders(id,proposal_id,actor_peer_id,action,targets,params,ttl_s,revert,state,payload,sig,created_at,not_after) VALUES ('retained',?,?,'isolate','[]','{}',60,0,?,?,'sig',?,?)`, proposal.ID, peer.ID, state, []byte(`{"id":"retained"}`), ts(now), ts(now.Add(time.Hour)))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := db.SetSetting(ctx, "decide.killswitch", "off"); err != nil {
+					t.Fatal(err)
+				}
+				if envs, err := db.SendOrders(ctx, peer.ID, now, false); err != nil || len(envs) != 0 {
+					t.Fatalf("provisional delivery: %+v %v", envs, err)
+				}
+				if expire {
+					err = db.ExpireOnboard(ctx, o.Expires)
+				} else {
+					err = db.AbortOnboard(ctx, o.ID, "failed", now)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := db.PeerByToken(ctx, []byte("token")); !errors.Is(err, store.ErrNotFound) {
+					t.Fatalf("token not revoked: %v", err)
+				}
+				peers, err := db.ListPeers(ctx)
+				if err != nil || len(peers) != 1 || !peers[0].Disabled {
+					t.Fatalf("peer not retained disabled: %+v %v", peers, err)
+				}
+				order, err := db.GetOrder(ctx, "retained")
+				if err != nil || order.State != state {
+					t.Fatalf("order changed: %+v %v", order, err)
+				}
+			})
+		}
 	}
 }

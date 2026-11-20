@@ -199,7 +199,7 @@ func New(name string, raw json.RawMessage) (intel.Matcher, error) {
 	}
 	return &Matcher{
 		name: name, base: strings.TrimRight(s.URL, "/"), months: s.Months,
-		hc:         &http.Client{Timeout: 120 * time.Second, CheckRedirect: tlspin.HTTPSRedirects},
+		hc:         &http.Client{Transport: tlspin.Transport(), Timeout: 120 * time.Second, CheckRedirect: tlspin.HTTPSRedirects},
 		background: true,
 	}, nil
 }

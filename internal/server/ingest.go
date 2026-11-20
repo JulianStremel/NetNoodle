@@ -199,6 +199,12 @@ func (s *Server) acceptObservation(ctx context.Context, p store.Peer, raw []byte
 			}
 		}
 	}
+	if p.Provisional {
+		if err := s.st.ConnectOnboard(ctx, p.ID, s.now()); err != nil {
+			return inventory.Result{}, http.StatusServiceUnavailable, errIngest
+		}
+		return inventory.Result{}, http.StatusOK, nil
+	}
 	res, err := s.ingestAs(ctx, obs, raw, agent)
 	if err != nil {
 		s.log.Error("ingest", "peer", p.Name, "err", err)

@@ -257,7 +257,7 @@ func (p *Publisher) Run(ctx context.Context) {
 			SetUsername(p.s.Username).SetPassword(p.password).SetAutoReconnect(false).
 			SetConnectRetry(false).SetConnectTimeout(5*time.Second).SetWriteTimeout(5*time.Second).
 			SetKeepAlive(15*time.Second).SetPingTimeout(5*time.Second).
-			SetTLSConfig(p.tls).
+			SetDialer(&net.Dialer{Timeout: 5 * time.Second, Control: tlspin.SafeControl}).SetTLSConfig(p.tls).
 			SetWill(p.s.TopicPrefix+"/availability", "offline", 1, true)
 		c := paho.NewClient(opts)
 		connectCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
@@ -507,7 +507,7 @@ func init() {
 func (p *Publisher) Test(ctx context.Context, e notify.Event) error {
 	opts := paho.NewClientOptions().AddBroker(p.broker).SetClientID(p.s.ClientID + "-test").
 		SetUsername(p.s.Username).SetPassword(p.password).SetAutoReconnect(false).
-		SetConnectRetry(false).SetConnectTimeout(5 * time.Second).SetWriteTimeout(5 * time.Second).SetTLSConfig(p.tls)
+		SetConnectRetry(false).SetConnectTimeout(5 * time.Second).SetWriteTimeout(5 * time.Second).SetDialer(&net.Dialer{Timeout: 5 * time.Second, Control: tlspin.SafeControl}).SetTLSConfig(p.tls)
 	c := paho.NewClient(opts)
 	defer c.Disconnect(0)
 	if !waitToken(ctx, c.Connect()) {

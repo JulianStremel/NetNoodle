@@ -66,7 +66,7 @@ func New(name string, raw json.RawMessage) (intel.Enricher, error) {
 	if err := tlspin.CheckURL(s.URL, false); err != nil {
 		return nil, fmt.Errorf("epss: %w", err)
 	}
-	return &enricher{name: name, url: s.URL, c: &http.Client{Timeout: 120 * time.Second, CheckRedirect: tlspin.HTTPSRedirects}}, nil
+	return &enricher{name: name, url: s.URL, c: &http.Client{Transport: tlspin.Transport(), Timeout: 120 * time.Second, CheckRedirect: tlspin.HTTPSRedirects}}, nil
 }
 
 func (e *enricher) Name() string { return e.name }

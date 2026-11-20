@@ -74,13 +74,14 @@ type DeviceClaim struct {
 
 // Peer is a program that talks to the server: a source, an agent or an actor.
 type Peer struct {
-	Version  string    `json:"version"`
-	ID       int64     `json:"id"`
-	Name     string    `json:"name"`
-	Role     string    `json:"role"` // source | agent | actor
-	Disabled bool      `json:"disabled"`
-	Created  time.Time `json:"created"`
-	LastSeen time.Time `json:"last_seen"`
+	Version     string    `json:"version"`
+	ID          int64     `json:"id"`
+	Name        string    `json:"name"`
+	Role        string    `json:"role"` // source | agent | actor
+	Provisional bool      `json:"provisional"`
+	Disabled    bool      `json:"disabled"`
+	Created     time.Time `json:"created"`
+	LastSeen    time.Time `json:"last_seen"`
 }
 
 // Peer roles.
