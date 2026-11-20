@@ -50,12 +50,12 @@ func (s *DB) ListActors(ctx context.Context) ([]store.ActorCaps, error) {
 	return out, nil
 }
 
-const orderSelect = `SELECT id,proposal_id,actor_peer_id,state,payload,sig,created_at,sent_at,done_at,message,revert_action,revert_due_at,reverted,revert_attempts FROM orders`
+const orderSelect = `SELECT id,proposal_id,actor_peer_id,state,payload,sig,created_at,sent_at,done_at,message,revert_action,revert_due_at,reverted,revert_attempts,result_json<>'' FROM orders`
 
 func scanOrder(r interface{ Scan(...any) error }) (store.Order, error) {
 	var o store.Order
 	var c, s, d, due string
-	e := r.Scan(&o.ID, &o.ProposalID, &o.ActorPeerID, &o.State, &o.Envelope.Payload, &o.Envelope.Sig, &c, &s, &d, &o.Message, &o.RevertAction, &due, &o.Reverted, &o.RevertAttempts)
+	e := r.Scan(&o.ID, &o.ProposalID, &o.ActorPeerID, &o.State, &o.Envelope.Payload, &o.Envelope.Sig, &c, &s, &d, &o.Message, &o.RevertAction, &due, &o.Reverted, &o.RevertAttempts, &o.ResultRecorded)
 	if e != nil {
 		return o, notFound(e)
 	}
@@ -296,7 +296,7 @@ func (s *DB) FinishOrder(ctx context.Context, peer int64, r proto.OrderResult, n
 		}
 		return store.ErrConflict
 	}
-	if r.Status != proto.OrderDone && r.Status != proto.OrderFailed && r.Status != proto.OrderRejected {
+	if r.Status != proto.OrderDone && r.Status != proto.OrderFailed && r.Status != proto.OrderRejected && r.Status != proto.OrderUncertain {
 		return store.ErrConflict
 	}
 	if (o.State != "sent" && o.State != "expired" && o.State != "uncertain") || o.SentAt.IsZero() || now.After(o.NotAfter.Add(24*time.Hour)) {
@@ -315,6 +315,9 @@ func (s *DB) FinishOrder(ctx context.Context, peer int64, r proto.OrderResult, n
 	due := time.Time{}
 	if o.State == "uncertain" && r.Status != proto.OrderDone {
 		due = o.RevertDueAt
+	}
+	if r.Status == proto.OrderUncertain && !o.Revert && o.RevertAction != "" && !o.Reverted {
+		due = now
 	}
 	if r.Status == proto.OrderDone && !o.Revert && o.RevertAction != "" && o.TTL > 0 && !o.Reverted {
 		due = at.Add(time.Duration(o.TTL) * time.Second)
@@ -345,6 +348,10 @@ func (s *DB) FinishOrder(ctx context.Context, peer int64, r proto.OrderResult, n
 				return e
 			}
 		}
+		message := r.Message
+		if r.Status == proto.OrderUncertain {
+			message = "possibly applied: " + strings.TrimPrefix(message, "possibly applied: ") + "; precautionary revert sent"
+		}
 		state := "failed"
 		if r.Status == proto.OrderDone {
 			state = "done"
@@ -352,7 +359,7 @@ func (s *DB) FinishOrder(ctx context.Context, peer int64, r proto.OrderResult, n
 		if o.Reverted {
 			state = "reverted"
 		}
-		_, e = tx.ExecContext(ctx, `UPDATE proposals SET state=?,reason=CASE WHEN ?='failed' THEN ? ELSE reason END,updated_at=? WHERE id=?`, state, state, r.Message, ts(now), o.ProposalID)
+		_, e = tx.ExecContext(ctx, `UPDATE proposals SET state=?,reason=CASE WHEN ?='failed' THEN ? ELSE reason END,updated_at=? WHERE id=?`, state, state, message, ts(now), o.ProposalID)
 	}
 	if e != nil {
 		return e
@@ -407,7 +414,7 @@ func (s *DB) ExpireOrders(ctx context.Context, now time.Time) error {
 	return tx.Commit()
 }
 func (s *DB) SetProposalOrderState(ctx context.Context, id int64, state, msg string, now time.Time) error {
-	_, e := s.db.ExecContext(ctx, `UPDATE proposals SET state=?,reason=CASE WHEN ?='' THEN reason ELSE ? END,decided_user=CASE WHEN ?='pending' THEN '' ELSE decided_user END,decided_at=CASE WHEN ?='pending' THEN '' ELSE decided_at END,target_snapshot=CASE WHEN ?='pending' THEN '[]' ELSE target_snapshot END,tier=CASE WHEN ?='pending' THEN 'approve' ELSE tier END,updated_at=?,expires_at=CASE WHEN ?='pending' THEN ? ELSE expires_at END WHERE id=? AND state IN ('approved','auto','no-actor')`, state, msg, msg, state, state, state, state, ts(now), state, ts(now.Add(7*24*time.Hour)), id)
+	_, e := s.db.ExecContext(ctx, `UPDATE proposals SET state=?,reason=CASE WHEN ?='' THEN reason ELSE ? END,decided_user=CASE WHEN ?='pending' THEN '' ELSE decided_user END,decided_at=CASE WHEN ?='pending' THEN '' ELSE decided_at END,override_agent_only=CASE WHEN ?='pending' THEN 0 ELSE override_agent_only END,target_reported_elsewhere=CASE WHEN ?='pending' THEN '{}' ELSE target_reported_elsewhere END,target_snapshot=CASE WHEN ?='pending' THEN '[]' ELSE target_snapshot END,tier=CASE WHEN ?='pending' THEN 'approve' ELSE tier END,updated_at=?,expires_at=CASE WHEN ?='pending' THEN ? ELSE expires_at END WHERE id=? AND state IN ('approved','auto','no-actor')`, state, msg, msg, state, state, state, state, state, state, ts(now), state, ts(now.Add(7*24*time.Hour)), id)
 	return e
 }
 func (s *DB) ScheduleRevert(ctx context.Context, id string, now time.Time) error {

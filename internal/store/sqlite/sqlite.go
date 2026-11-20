@@ -254,3 +254,27 @@ func (s *DB) ListEvents(ctx context.Context, limit int) ([]store.Event, error) {
 	}
 	return out, rows.Err()
 }
+
+// RecentDeviceClaims includes the structured device reference and the exact
+// legacy event title. It never matches device #1 against device #10, nor depends
+// on the bounded general event feed.
+func (s *DB) RecentDeviceClaims(ctx context.Context, device int64, since, until time.Time) ([]store.DeviceClaim, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT actor,at FROM events WHERE type='device.claimed' AND at>=? AND at<=?
+		AND (CASE WHEN json_valid(data) THEN json_extract(data,'$.device_id')=? ELSE 0 END
+		OR summary='Agent '||actor||' took over device #'||?) ORDER BY at DESC,id DESC`, ts(since), ts(until), device, device)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []store.DeviceClaim{}
+	for rows.Next() {
+		var c store.DeviceClaim
+		var at string
+		if err := rows.Scan(&c.Agent, &at); err != nil {
+			return nil, err
+		}
+		c.At = parseTS(at)
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}

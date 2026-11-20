@@ -2,9 +2,11 @@ package server
 
 import (
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/JulianStremel/netnoodle/internal/store"
 )
@@ -78,6 +80,26 @@ func (s *Server) handleProposals(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "internal error")
 		return
 	}
+	for i := range ps {
+		p := &ps[i]
+		if p.State != "pending" && p.State != "approved" {
+			continue
+		}
+		// Pending rows have no approved identity yet. Prepare the same bounded
+		// snapshot that approval will pin; approved rows use their saved values.
+		if p.State == "pending" {
+			p.TargetSnapshot, p.TargetReportedElsewhere, e = s.st.SnapshotTargets(r.Context(), p.DeviceID)
+			if e != nil {
+				writeErr(w, 500, "internal error")
+				return
+			}
+		}
+		p.RecentClaims, e = s.st.RecentDeviceClaims(r.Context(), p.DeviceID, s.now().Add(-30*24*time.Hour), s.now())
+		if e != nil {
+			writeErr(w, 500, "internal error")
+			return
+		}
+	}
 	writeJSON(w, 200, ps)
 }
 func (s *Server) handleProposalDecision(state string) http.HandlerFunc {
@@ -87,8 +109,17 @@ func (s *Server) handleProposalDecision(state string) http.HandlerFunc {
 			writeErr(w, 400, "bad id")
 			return
 		}
+		var req struct {
+			OverrideAgentOnly bool `json:"override_agent_only"`
+		}
+		if state == "approved" {
+			if e := readJSON(r, &req); e != nil && !errors.Is(e, io.EOF) {
+				writeErr(w, 400, "bad request")
+				return
+			}
+		}
 		u, _ := userFrom(r.Context())
-		if e := s.st.DecideProposal(r.Context(), id, state, u.Name, s.now()); e != nil {
+		if e := s.st.DecideProposal(r.Context(), id, state, u.Name, s.now(), req.OverrideAgentOnly); e != nil {
 			if errors.Is(e, store.ErrConflict) {
 				writeErr(w, 409, "proposal is no longer pending")
 			} else {

@@ -18,6 +18,7 @@ type Order struct {
 	ProposalID     int64           `json:"proposal_id"`
 	ActorPeerID    int64           `json:"actor_peer_id"`
 	State          string          `json:"state"`
+	ResultRecorded bool            `json:"-"`
 	Envelope       orders.Envelope `json:"-"`
 	CreatedAt      time.Time       `json:"created_at"`
 	SentAt         time.Time       `json:"sent_at,omitzero"`

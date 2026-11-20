@@ -17,20 +17,27 @@ async function page(root) {
   history.append(el("div", { class: "filters" }, state, filter), historyContent);
   let rows = [];
   const historyState = () => state.value === "all" ? "approved,ordered,done,failed,no-actor,reverted,rejected,expired,resolved,notify" : state.value;
-  const act = async (p, decision, button) => {
+  const act = async (p, decision, button, override = false) => {
     button.disabled = true;
     try {
-      await api(`/api/proposals/${p.id}/${decision}`, { method: "POST", body: {} });
+      await api(`/api/proposals/${p.id}/${decision}`, { method: "POST", body: decision === "approve" ? { override_agent_only: override } : {} });
       await refresh();
     } catch (e) { error.textContent = e.message; button.disabled = false; }
   };
+  const agentOnly = (p) => (p.target_snapshot || []).some((id) => id.kind === "mac" && !p.target_reported_elsewhere?.[`${id.kind}=${id.value}`]);
   const columns = [
     { title: "Device", render: (p) => el("a", { href: `#/devices/${p.device_id}` }, p.device_name || `#${p.device_id}`) },
     { title: "Vulnerability", render: (p) => vulnCell({ vuln_id: p.vuln_id, aliases: [] }) },
     { title: "Action", render: (p) => p.action || "Notification" },
     { title: "Tier", render: (p) => el("span", { class: "pill" }, p.tier) },
     { title: "Reason", render: (p) => el("span", { title: p.decided_by.join(", ") }, p.reason) },
-    { title: "Approved targets", render: (p) => (p.target_snapshot || []).map((id) => `${id.kind}=${id.value}`).join(", ") || "None" },
+    { title: "Targets (snapshot)", render: (p) => el("div", {},
+      (p.target_snapshot || []).map((id) => el("p", {}, `${id.kind}=${id.value}`)),
+      !(p.target_snapshot || []).length ? el("span", {}, "None") : "") },
+    { title: "Ports", render: (p) => p.action === "block-port" ? el("span", {}, (p.params?.ports || []).join(", ") || "None") : "" },
+    { title: "Warnings", render: (p) => ["pending", "approved"].includes(p.state) ? el("div", {},
+      (p.recent_claims || []).map((claim) => el("p", {}, `identity claimed by agent ${claim.agent} on ${fmtTime(claim.at)}`)),
+      agentOnly(p) ? el("p", {}, "MAC only reported by the device's own agent") : "") : "" },
     { title: "TTL", render: (p) => p.ttl_s ? `${p.ttl_s / 3600}h` : "None" },
     { title: "Order", render: (p) => {
       const orders = orderRows.filter((o) => o.proposal_id === p.id);
@@ -55,7 +62,12 @@ async function page(root) {
     if (approval) cols.push({ title: "Decision", render: (p) => {
       const approve = el("button", { onclick: () => act(p, "approve", approve) }, "Approve");
       const reject = el("button", { class: "secondary", onclick: () => act(p, "reject", reject) }, "Reject");
-      return el("div", { class: "proposal-buttons" }, approve, reject);
+      const buttons = el("div", { class: "proposal-buttons" }, approve, reject);
+      if (agentOnly(p)) {
+        const override = el("button", { class: "secondary", onclick: () => act(p, "approve", override, true) }, "Approve with agent-only MAC override");
+        buttons.append(override);
+      }
+      return buttons;
     } });
     else cols.push({ title: "State", render: (p) => [el("span", { class: "pill" }, p.state), p.decided_user ? el("p", { class: "small muted", title: fmtTime(p.decided_at) }, p.decided_user) : ""] });
     card.replaceChildren(el("h2", {}, `${title} (${list.length})`), list.length ? table(cols, list) : el("p", { class: "muted" }, "None."));
@@ -80,7 +92,7 @@ async function page(root) {
     orderRows = knownOrders;
     actorsCard.replaceChildren(el("h2", {}, "Known actors"), actors.length ? table([
       { title: "Actor", render: (a) => `${a.peer.name}${a.peer.disabled ? " (disabled)" : ""}` },
-      { title: "Capabilities", render: (a) => a.capabilities.map((c) => el("p", {}, `${c.action}: ${c.target_id_kinds.join(", ")}${c.reversible ? `; revert ${c.revert_action}` : ""}`)) },
+      { title: "Capabilities", render: (a) => a.capabilities.map((c) => el("p", {}, `${c.action}: ${c.target_id_kinds.join(", ")}${c.target_scope?.length ? `; scope ${c.target_scope.join(", ")}` : ""}${c.reversible ? `; revert ${c.revert_action}` : ""}`)) },
     ], actors) : el("p", { class: "muted" }, "No actors enrolled."));
     const [settings, pendingRows, autoRows] = await Promise.all([
       api("/api/decide/settings"), api("/api/proposals?state=pending&limit=500"),

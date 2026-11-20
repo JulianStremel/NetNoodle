@@ -4,8 +4,10 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"net/http"
+	"path"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/JulianStremel/netnoodle/internal/decide"
@@ -35,6 +37,18 @@ func (s *Server) handleActorHello(w http.ResponseWriter, r *http.Request) {
 		for _, k := range c.TargetIDKinds {
 			if k == "" || len(k) > 64 {
 				writeErr(w, 400, "invalid target kind")
+				return
+			}
+		}
+		if len(c.TargetScope) > 64 {
+			writeErr(w, 400, "invalid target scope")
+			return
+		}
+		for _, pattern := range c.TargetScope {
+			kind, glob, ok := strings.Cut(pattern, "=")
+			_, err := path.Match(glob, "")
+			if !ok || kind == "" || glob == "" || len(pattern) > 1024 || err != nil {
+				writeErr(w, 400, "invalid target scope")
 				return
 			}
 		}
@@ -100,7 +114,7 @@ func (s *Server) handleActorOrders(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) handleOrderResult(w http.ResponseWriter, r *http.Request) {
 	var result proto.OrderResult
-	if e := readJSON(r, &result); e != nil || result.Version != proto.Version || (result.Status != proto.OrderDone && result.Status != proto.OrderFailed && result.Status != proto.OrderRejected) || len(result.Message) > 4096 {
+	if e := readJSON(r, &result); e != nil || result.Version != proto.Version || (result.Status != proto.OrderDone && result.Status != proto.OrderFailed && result.Status != proto.OrderRejected && result.Status != proto.OrderUncertain) || len(result.Message) > 4096 {
 		writeErr(w, 400, "invalid order result")
 		return
 	}
@@ -108,6 +122,9 @@ func (s *Server) handleOrderResult(w http.ResponseWriter, r *http.Request) {
 	s.orders.run.Lock()
 	previous, previousErr := s.st.GetOrder(r.Context(), result.OrderID)
 	e := s.st.FinishOrder(r.Context(), p.ID, result, s.now())
+	if e == nil && result.Status == proto.OrderUncertain {
+		e = s.queueDueReverts(r.Context(), s.now())
+	}
 	s.orders.run.Unlock()
 	if errors.Is(e, store.ErrNotFound) {
 		writeErr(w, 404, "no such order")
@@ -121,7 +138,7 @@ func (s *Server) handleOrderResult(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "internal error")
 		return
 	}
-	if previousErr == nil && previous.State == string(result.Status) {
+	if previousErr == nil && previous.ResultRecorded {
 		writeJSON(w, 200, map[string]string{"status": "ok"})
 		return
 	}

@@ -75,6 +75,7 @@ func (s *Server) ingestAs(ctx context.Context, obs proto.Observation, raw []byte
 		}
 	}
 	for _, id := range res.Claimed {
+		data, _ := json.Marshal(map[string]any{"device_id": id})
 		// An agent took over a device that other sources had found. This
 		// is normal for a new agent, but it is also what a rogue agent
 		// would do; make it visible (security review 2026-11-20).
@@ -85,7 +86,7 @@ func (s *Server) ingestAs(ctx context.Context, obs proto.Observation, raw []byte
 			Detail:   "An agent report now describes a device that other sources found first. Check that this agent runs on that device.",
 			Link:     "#/devices/" + strconv.FormatInt(id, 10),
 			Fields:   map[string]string{"source": obs.Source},
-		}, obs.Source, "")
+		}, obs.Source, string(data))
 	}
 	for _, m := range res.Merged {
 		s.event(ctx, "device.merged", obs.Source, fmt.Sprintf("device #%d merged into #%d", m[1], m[0]))

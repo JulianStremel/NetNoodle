@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -122,19 +123,34 @@ func (s *Server) evaluateSituation(ctx context.Context, ds []decide.Decider, gs 
 	// block-port needs the ports. The server fills them from the exposed
 	// listeners of the vulnerable package; without any, nothing can be
 	// blocked, so the proposal is only a notification.
+	var keptOpen []string
 	if p.Action == "block-port" {
-		if _, set := p.Params["ports"]; !set {
-			if len(situation.Device.Listeners) == 0 {
-				p.Tier, p.Action = decide.TierNotify, ""
-				p.Reason = strings.TrimPrefix(p.Reason+"; no exposed port to block", "; ")
-			} else {
-				if p.Params == nil {
-					p.Params = map[string]any{}
+		values := situation.Device.Listeners
+		if supplied, set := p.Params["ports"]; set {
+			values = nil
+			switch v := supplied.(type) {
+			case []string:
+				values = v
+			case []any:
+				for _, item := range v {
+					if value, ok := item.(string); ok {
+						values = append(values, value)
+					}
 				}
-				p.Params["ports"] = situation.Device.Listeners
 			}
 		}
+		ports, kept := blockablePorts(values)
+		keptOpen = kept
+		if p.Params == nil {
+			p.Params = map[string]any{}
+		}
+		p.Params["ports"] = ports
+		if len(ports) == 0 {
+			p.Tier, p.Action = decide.TierNotify, ""
+			p.Reason = strings.TrimPrefix(p.Reason+"; no exposed port to block", "; ")
+		}
 	}
+
 	// This invariant is independent of the configurable guards and runs last.
 	if p.Tier == decide.TierAuto {
 		v, err := s.st.GetSetting(ctx, "decide.killswitch")
@@ -145,6 +161,9 @@ func (s *Server) evaluateSituation(ctx context.Context, ds []decide.Decider, gs 
 			p.Tier = decide.TierApprove
 			p.Reason = "kill switch"
 		}
+	}
+	for _, value := range keptOpen {
+		p.Reason = strings.TrimPrefix(p.Reason+"; ports "+value+" kept open", "; ")
 	}
 	state := p.Tier.String()
 	if p.Tier == decide.TierApprove {
@@ -264,4 +283,26 @@ func findingSituation(d store.DeviceDetail, f store.FindingRow, n GraphNode) dec
 		}
 	}
 	return decide.Situation{Device: device, Component: f.PURL, Confidence: f.Confidence, Networks: n.Networks, RelatedRisk: n.RelatedRisk, Vuln: intel.Vuln{ID: f.VulnID, Aliases: f.Aliases, Summary: f.Summary, Score: f.Score, Vector: f.Vector, KEV: f.KEV, EPSS: f.EPSS, EPSSPct: f.EPSSPct, Facts: f.Facts}}
+}
+
+// Keep management ports reachable and send only bounded, canonical actor input.
+func blockablePorts(values []string) (ports, kept []string) {
+	ports, kept = []string{}, []string{}
+	seen := map[string]bool{}
+	for _, value := range values {
+		number, protocol, ok := strings.Cut(value, "/")
+		n, err := strconv.Atoi(number)
+		if !ok || err != nil || n < 1 || n > 65535 || strconv.Itoa(n) != number || (protocol != "tcp" && protocol != "udp") || seen[value] {
+			continue
+		}
+		seen[value] = true
+		if n == 22 || n == 7444 {
+			kept = append(kept, value)
+			continue
+		}
+		if len(ports) < 32 {
+			ports = append(ports, value)
+		}
+	}
+	return ports, kept
 }

@@ -6,7 +6,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"path"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -101,8 +103,8 @@ func (s *Server) RunPlanner(ctx context.Context) {
 	}
 }
 
-// planOrders serializes planning with results and operator scheduling. Strong
-// identifiers win; actors with equal strength are ordered by lowest peer ID.
+// planOrders serializes planning with results and operator scheduling. Matching
+// scopes win, then strong identifiers, then lowest peer ID. Weak targets are refused.
 func (s *Server) planOrders(ctx context.Context) error {
 	s.orders.run.Lock()
 	defer s.orders.run.Unlock()
@@ -124,36 +126,12 @@ func (s *Server) planOrders(ctx context.Context) error {
 		}
 		s.emit(ctx, notify.Event{Type: "order.expired", Severity: severity, Title: "Order " + o.ID + " expired", Detail: "order expired", Link: "#/actions"}, o.Actor, `{"severity":"`+severity+`"}`)
 	}
-	os, e := s.st.DueReverts(ctx, now)
-	if e != nil {
+	if e = s.queueDueReverts(ctx, now); e != nil {
 		return e
 	}
 	actors, e := s.st.ListActors(ctx)
 	if e != nil {
 		return e
-	}
-	enabled := map[int64]bool{}
-	for _, a := range actors {
-		enabled[a.Peer.ID] = !a.Peer.Disabled
-	}
-	for _, o := range os {
-		if o.Revert || o.Reverted || o.RevertAction == "" || o.RevertAttempts >= 6 {
-			continue
-		}
-		if !enabled[o.ActorPeerID] {
-			first, err := s.st.MarkRevertBlocked(ctx, o.ID)
-			if err != nil {
-				return err
-			}
-			if first {
-				s.emit(ctx, notify.Event{Type: "order.revert-blocked", Severity: "critical", Title: "revert blocked: actor " + o.Actor + " disabled", Link: "#/actions"}, o.Actor, `{"severity":"critical"}`)
-			}
-			continue
-		}
-		r := store.Order{Order: proto.Order{Actor: o.Actor, Action: o.RevertAction, Targets: o.Targets, Params: o.Params, Revert: true, RevertOf: o.ID}, ProposalID: o.ProposalID, ActorPeerID: o.ActorPeerID}
-		if e = s.queueSigned(ctx, r); e != nil && !errors.Is(e, store.ErrConflict) {
-			return e
-		}
 	}
 	// Share the decision lock with the kill switch setter; a completed switch
 	// can never race a new order insertion.
@@ -252,6 +230,7 @@ func (s *Server) planOrders(ctx context.Context) error {
 		var capability proto.Capability
 		var targets []proto.Identifier
 		best := -1
+		agentOnly := false
 		for i, a := range actors {
 			if a.Peer.Disabled {
 				continue
@@ -260,36 +239,38 @@ func (s *Server) planOrders(ctx context.Context) error {
 				if c.Action != p.Action || (p.Tier == "auto" && (!c.Reversible || c.RevertAction == "" || p.TTL <= 0)) {
 					continue
 				}
-				// Use the first supported strong kind from the pinned/live intersection.
-				kind, score := "", 1
-				for _, want := range c.TargetIDKinds {
+				// Rank each supported kind independently. Every selected value
+				// must match scope; never send an out-of-scope sibling value.
+				for _, kind := range c.TargetIDKinds {
+					ids := []proto.Identifier{}
+					score := 1
+					if len(c.TargetScope) > 0 {
+						score = 2
+					}
 					for _, id := range intersection {
-						if id.Kind == want {
-							kind = want
-							break
+						if id.Kind != kind || !matchesTargetScope(c.TargetScope, id) {
+							continue
 						}
-					}
-					if kind != "" {
-						break
-					}
-				}
-				ids := []proto.Identifier{}
-				for _, id := range intersection {
-					if id.Kind == kind {
+						if id.Kind == "mac" && !p.OverrideAgentOnly && !p.TargetReportedElsewhere[id.Kind+"="+id.Value] {
+							agentOnly = true
+							continue
+						}
 						ids = append(ids, id)
 					}
+					if len(ids) == 0 || score <= best {
+						continue
+					}
+					best, chosen, capability, targets = score, &actors[i], c, ids
 				}
-
-				if len(ids) == 0 || score <= best {
-					continue
-				}
-				best = score
-				chosen = &actors[i]
-				capability = c
-				targets = ids
 			}
 		}
 		if chosen == nil {
+			if agentOnly {
+				if e = s.st.SetProposalOrderState(ctx, p.ID, "pending", "target MAC only reported by the device's own agent — confirm with UniFi/scan data or approve again with override", now); e != nil {
+					return e
+				}
+				continue
+			}
 			if e = s.st.SetProposalOrderState(ctx, p.ID, "no-actor", "no actor with matching capability and identifiers", now); e != nil {
 				return e
 			}
@@ -347,4 +328,59 @@ func (s *Server) releaseOrderPoll(id int64) {
 		delete(s.orders.polls, id)
 		delete(s.orders.wakes, id)
 	}
+}
+
+// Match the value only: kind names are exact. Malformed globs fail closed.
+func matchesTargetScope(patterns []string, id proto.Identifier) bool {
+	if len(patterns) == 0 {
+		return true
+	}
+	for _, pattern := range patterns {
+		kind, glob, ok := strings.Cut(pattern, "=")
+		if !ok || kind != id.Kind {
+			continue
+		}
+		if match, err := path.Match(glob, id.Value); err == nil && match {
+			return true
+		}
+	}
+	return false
+}
+
+// Called under orders.run by expiry planning and explicit uncertain results.
+// Recovery always goes to the original actor, regardless of current scopes.
+func (s *Server) queueDueReverts(ctx context.Context, now time.Time) error {
+	os, e := s.st.DueReverts(ctx, now)
+	if e != nil {
+		return e
+	}
+	actors, e := s.st.ListActors(ctx)
+	if e != nil {
+		return e
+	}
+	enabled := map[int64]bool{}
+	for _, a := range actors {
+		enabled[a.Peer.ID] = !a.Peer.Disabled
+	}
+	for _, o := range os {
+		if o.Revert || o.Reverted || o.RevertAction == "" || o.RevertAttempts >= 6 {
+			continue
+		}
+		if !enabled[o.ActorPeerID] {
+			first, err := s.st.MarkRevertBlocked(ctx, o.ID)
+			if err != nil {
+				return err
+			}
+			if first {
+				s.emit(ctx, notify.Event{Type: "order.revert-blocked", Severity: "critical", Title: "revert blocked: actor " + o.Actor + " disabled", Link: "#/actions"}, o.Actor, `{"severity":"critical"}`)
+			}
+			continue
+		}
+		r := store.Order{Order: proto.Order{Actor: o.Actor, Action: o.RevertAction, Targets: o.Targets, Params: o.Params, Revert: true, RevertOf: o.ID}, ProposalID: o.ProposalID, ActorPeerID: o.ActorPeerID}
+		if e = s.queueSigned(ctx, r); e != nil && !errors.Is(e, store.ErrConflict) {
+			return e
+		}
+	}
+
+	return nil
 }

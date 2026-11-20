@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"testing"
 	"time"
 
@@ -316,7 +315,7 @@ func TestMigration0009PreservesOrdersAndInvalidatesUnpinnedApprovals(t *testing.
 		t.Fatal(e)
 	}
 	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), "0009") {
+		if entry.Name() >= "0009" {
 			continue
 		}
 		name := "migrations/" + entry.Name()

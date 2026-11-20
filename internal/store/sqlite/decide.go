@@ -69,7 +69,7 @@ func (s *DB) SetSetting(ctx context.Context, key, value string) error {
 	}
 	if key == "decide.killswitch" && value == "on" {
 		// One update, atomic with the setting so readers never see a partial switch.
-		if _, e = tx.ExecContext(ctx, `UPDATE proposals SET state='pending',tier='approve',target_snapshot='[]',decided_user='',decided_at='',reason='kill switch',updated_at=?,expires_at=? WHERE state='auto' OR (state='no-actor' AND tier='auto') OR id IN (SELECT proposal_id FROM orders WHERE state='queued' AND revert=0)`, ts(now), ts(now.Add(7*24*time.Hour))); e != nil {
+		if _, e = tx.ExecContext(ctx, `UPDATE proposals SET state='pending',tier='approve',target_snapshot='[]',target_reported_elsewhere='{}',override_agent_only=0,decided_user='',decided_at='',reason='kill switch',updated_at=?,expires_at=? WHERE state='auto' OR (state='no-actor' AND tier='auto') OR id IN (SELECT proposal_id FROM orders WHERE state='queued' AND revert=0)`, ts(now), ts(now.Add(7*24*time.Hour))); e != nil {
 			return e
 		}
 		if _, e = tx.ExecContext(ctx, `UPDATE orders SET state='cancelled',message='kill switch',done_at=? WHERE state='queued' AND revert=0`, ts(now)); e != nil {
@@ -79,12 +79,12 @@ func (s *DB) SetSetting(ctx context.Context, key, value string) error {
 	return tx.Commit()
 }
 
-const proposalSelect = `SELECT p.id,p.device_id,d.name,p.vuln_id,p.purl,p.action,p.tier,p.state,p.reason,p.decided_by,p.params,p.ttl_s,p.created_at,p.updated_at,p.expires_at,p.decided_user,p.decided_at,p.target_snapshot FROM proposals p JOIN devices d ON d.id=p.device_id`
+const proposalSelect = `SELECT p.id,p.device_id,d.name,p.vuln_id,p.purl,p.action,p.tier,p.state,p.reason,p.decided_by,p.params,p.ttl_s,p.created_at,p.updated_at,p.expires_at,p.decided_user,p.decided_at,p.target_snapshot,p.target_reported_elsewhere,p.override_agent_only FROM proposals p JOIN devices d ON d.id=p.device_id`
 
 func scanProposal(r interface{ Scan(...any) error }) (store.Proposal, error) {
 	var p store.Proposal
-	var by, params, c, u, x, a, snapshot string
-	e := r.Scan(&p.ID, &p.DeviceID, &p.DeviceName, &p.VulnID, &p.PURL, &p.Action, &p.Tier, &p.State, &p.Reason, &by, &params, &p.TTL, &c, &u, &x, &p.DecidedUser, &a, &snapshot)
+	var by, params, c, u, x, a, snapshot, evidence string
+	e := r.Scan(&p.ID, &p.DeviceID, &p.DeviceName, &p.VulnID, &p.PURL, &p.Action, &p.Tier, &p.State, &p.Reason, &by, &params, &p.TTL, &c, &u, &x, &p.DecidedUser, &a, &snapshot, &evidence, &p.OverrideAgentOnly)
 	if e != nil {
 		return p, notFound(e)
 	}
@@ -95,6 +95,9 @@ func scanProposal(r interface{ Scan(...any) error }) (store.Proposal, error) {
 		return p, e
 	}
 	if e = json.Unmarshal([]byte(snapshot), &p.TargetSnapshot); e != nil {
+		return p, e
+	}
+	if e = json.Unmarshal([]byte(evidence), &p.TargetReportedElsewhere); e != nil {
 		return p, e
 	}
 	p.CreatedAt = parseTS(c)
@@ -177,19 +180,21 @@ func (s *DB) UpsertProposal(ctx context.Context, p store.Proposal) (store.Propos
 			return p, false, e
 		}
 	}
-	snapshot := "[]"
+	snapshot, evidence := "[]", "{}"
 	if p.State == "auto" {
 		if !fresh && old.State == "auto" {
 			b, _ := json.Marshal(old.TargetSnapshot)
 			snapshot = string(b)
+			b, _ = json.Marshal(old.TargetReportedElsewhere)
+			evidence = string(b)
 		} else {
-			snapshot, e = targetSnapshot(ctx, tx, p.DeviceID)
+			snapshot, evidence, e = targetSnapshot(ctx, tx, p.DeviceID)
 			if e != nil {
 				return p, false, e
 			}
 		}
 	}
-	if _, e = tx.ExecContext(ctx, `UPDATE proposals SET target_snapshot=? WHERE id=?`, snapshot, p.ID); e != nil {
+	if _, e = tx.ExecContext(ctx, `UPDATE proposals SET target_snapshot=?,target_reported_elsewhere=?,override_agent_only=0 WHERE id=?`, snapshot, evidence, p.ID); e != nil {
 		return p, false, e
 	}
 	if e = tx.Commit(); e != nil {
@@ -235,7 +240,7 @@ func (s *DB) ListProposals(ctx context.Context, f store.ProposalFilter) ([]store
 	}
 	return out, rows.Err()
 }
-func (s *DB) DecideProposal(ctx context.Context, id int64, state, user string, at time.Time) error {
+func (s *DB) DecideProposal(ctx context.Context, id int64, state, user string, at time.Time, override ...bool) error {
 	if state != "approved" && state != "rejected" {
 		return fmt.Errorf("invalid decision")
 	}
@@ -248,14 +253,14 @@ func (s *DB) DecideProposal(ctx context.Context, id int64, state, user string, a
 	if e = tx.QueryRowContext(ctx, `SELECT device_id FROM proposals WHERE id=?`, id).Scan(&device); e != nil {
 		return notFound(e)
 	}
-	snapshot := "[]"
+	snapshot, evidence := "[]", "{}"
 	if state == "approved" {
-		snapshot, e = targetSnapshot(ctx, tx, device)
+		snapshot, evidence, e = targetSnapshot(ctx, tx, device)
 		if e != nil {
 			return e
 		}
 	}
-	r, e := tx.ExecContext(ctx, `UPDATE proposals SET state=?,decided_user=?,decided_at=?,updated_at=?,expires_at=?,target_snapshot=? WHERE id=? AND state='pending' AND (expires_at='' OR expires_at>?)`, state, user, ts(at), ts(at), ts(at.Add(7*24*time.Hour)), snapshot, id, ts(at))
+	r, e := tx.ExecContext(ctx, `UPDATE proposals SET state=?,decided_user=?,decided_at=?,updated_at=?,expires_at=?,target_snapshot=?,target_reported_elsewhere=?,override_agent_only=? WHERE id=? AND state='pending' AND (expires_at='' OR expires_at>?)`, state, user, ts(at), ts(at), ts(at.Add(7*24*time.Hour)), snapshot, evidence, state == "approved" && len(override) > 0 && override[0], id, ts(at))
 	if e != nil {
 		return e
 	}
@@ -266,25 +271,60 @@ func (s *DB) DecideProposal(ctx context.Context, id int64, state, user string, a
 	return tx.Commit()
 }
 
-func targetSnapshot(ctx context.Context, tx *sql.Tx, device int64) (string, error) {
-	rows, e := tx.QueryContext(ctx, `SELECT kind,value,strength FROM device_ids WHERE device_id=? AND strength='strong' AND kind NOT IN ('ip','hostname') AND value<>'' ORDER BY kind,value LIMIT 32`, device)
+// SnapshotTargets is also used to prepare the pending approval view. Approval
+// captures fresh evidence in its own transaction; later reports cannot widen it.
+func (s *DB) SnapshotTargets(ctx context.Context, device int64) ([]proto.Identifier, map[string]bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer tx.Rollback()
+	snapshot, evidence, err := targetSnapshot(ctx, tx, device)
+	if err != nil {
+		return nil, nil, err
+	}
+	var ids []proto.Identifier
+	var sources map[string]bool
+	if err = json.Unmarshal([]byte(snapshot), &ids); err != nil {
+		return nil, nil, err
+	}
+	if err = json.Unmarshal([]byte(evidence), &sources); err != nil {
+		return nil, nil, err
+	}
+	return ids, sources, nil
+}
+
+func targetSnapshot(ctx context.Context, tx *sql.Tx, device int64) (string, string, error) {
+	rows, e := tx.QueryContext(ctx, `SELECT i.kind,i.value,i.strength,
+        EXISTS(SELECT 1 FROM device_id_sources s WHERE s.kind=i.kind AND s.value=i.value
+            AND NOT EXISTS(SELECT 1 FROM device_ids a WHERE a.device_id=i.device_id AND
+                ((a.kind='agent' AND a.value=s.source) OR
+                 (a.kind='agent.child' AND substr(a.value,1,length(s.source)+1)=s.source||'/'))))
+        FROM device_ids i WHERE i.device_id=? AND i.strength='strong' AND i.kind NOT IN ('ip','hostname') AND i.value<>'' ORDER BY i.kind,i.value LIMIT 32`, device)
 	if e != nil {
-		return "", e
+		return "", "", e
 	}
 	defer rows.Close()
 	ids := []proto.Identifier{}
+	sources := map[string]bool{}
 	for rows.Next() {
 		var id proto.Identifier
-		if e = rows.Scan(&id.Kind, &id.Value, &id.Strength); e != nil {
-			return "", e
+		var other bool
+		if e = rows.Scan(&id.Kind, &id.Value, &id.Strength, &other); e != nil {
+			return "", "", e
 		}
 		ids = append(ids, id)
+		sources[id.Kind+"="+id.Value] = other
 	}
 	if e = rows.Err(); e != nil {
-		return "", e
+		return "", "", e
 	}
 	b, e := json.Marshal(ids)
-	return string(b), e
+	if e != nil {
+		return "", "", e
+	}
+	evidence, e := json.Marshal(sources)
+	return string(b), string(evidence), e
 }
 
 func (s *DB) ExpireProposals(ctx context.Context, before time.Time) error {

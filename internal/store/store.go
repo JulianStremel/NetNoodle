@@ -62,8 +62,14 @@ type Event struct {
 type Events interface {
 	AddEvent(ctx context.Context, e Event) error
 	ListEvents(ctx context.Context, limit int) ([]Event, error)
+	RecentDeviceClaims(context.Context, int64, time.Time, time.Time) ([]DeviceClaim, error)
 	// PurgeEvents deletes events older than before.
 	PurgeEvents(ctx context.Context, before time.Time) error
+}
+
+type DeviceClaim struct {
+	Agent string    `json:"agent"`
+	At    time.Time `json:"at"`
 }
 
 // Peer is a program that talks to the server: a source, an agent or an actor.
@@ -343,23 +349,27 @@ type Settings interface {
 }
 type Proposal struct {
 	TargetSnapshot []proto.Identifier `json:"target_snapshot"`
-	ID             int64              `json:"id"`
-	DeviceID       int64              `json:"device_id"`
-	DeviceName     string             `json:"device_name"`
-	VulnID         string             `json:"vuln_id"`
-	PURL           string             `json:"purl"`
-	Action         string             `json:"action"`
-	Tier           string             `json:"tier"`
-	State          string             `json:"state"`
-	Reason         string             `json:"reason"`
-	DecidedBy      []string           `json:"decided_by"`
-	Params         map[string]any     `json:"params"`
-	TTL            int64              `json:"ttl_s"`
-	CreatedAt      time.Time          `json:"created_at"`
-	UpdatedAt      time.Time          `json:"updated_at"`
-	ExpiresAt      time.Time          `json:"expires_at,omitzero"`
-	DecidedUser    string             `json:"decided_user"`
-	DecidedAt      time.Time          `json:"decided_at,omitzero"`
+	// Keys are kind=value. False (including absent legacy evidence) fails closed.
+	TargetReportedElsewhere map[string]bool `json:"target_reported_elsewhere"`
+	OverrideAgentOnly       bool            `json:"override_agent_only"`
+	RecentClaims            []DeviceClaim   `json:"recent_claims,omitempty"`
+	ID                      int64           `json:"id"`
+	DeviceID                int64           `json:"device_id"`
+	DeviceName              string          `json:"device_name"`
+	VulnID                  string          `json:"vuln_id"`
+	PURL                    string          `json:"purl"`
+	Action                  string          `json:"action"`
+	Tier                    string          `json:"tier"`
+	State                   string          `json:"state"`
+	Reason                  string          `json:"reason"`
+	DecidedBy               []string        `json:"decided_by"`
+	Params                  map[string]any  `json:"params"`
+	TTL                     int64           `json:"ttl_s"`
+	CreatedAt               time.Time       `json:"created_at"`
+	UpdatedAt               time.Time       `json:"updated_at"`
+	ExpiresAt               time.Time       `json:"expires_at,omitzero"`
+	DecidedUser             string          `json:"decided_user"`
+	DecidedAt               time.Time       `json:"decided_at,omitzero"`
 }
 type ProposalFilter struct {
 	State    string
@@ -376,7 +386,8 @@ type Proposals interface {
 	ProposalStats(context.Context) (map[string]int, error)
 	PurgeProposals(context.Context, time.Time) error
 	GetProposal(context.Context, int64) (Proposal, error)
-	DecideProposal(context.Context, int64, string, string, time.Time) error
+	DecideProposal(context.Context, int64, string, string, time.Time, ...bool) error
+	SnapshotTargets(context.Context, int64) ([]proto.Identifier, map[string]bool, error)
 	// ExpireProposals closes pending proposals whose seven-day approval window
 	// ended by cutoff+7d, using creation time for legacy rows without a deadline.
 	ExpireProposals(context.Context, time.Time) error
