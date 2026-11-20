@@ -76,3 +76,53 @@ func TestANDAndNetworks(t *testing.T) {
 		t.Fatal("narrow CIDR must not admit a whole network")
 	}
 }
+
+func TestNetworkTrustRequiresAllAddresses(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ips  []string
+		want bool
+	}{
+		{"no addresses", nil, false},
+		{"inside", []string{"10.1.2.3", "10.9.8.7"}, true},
+		{"mixed", []string{"10.1.2.3", "203.0.113.1"}, false},
+		{"mixed reversed", []string{"203.0.113.1", "10.1.2.3"}, false},
+		{"invalid", []string{"10.1.2.3", "invalid"}, false},
+		{"IPv6 outside", []string{"10.1.2.3", "2001:db8::1"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := decide.Situation{Device: decide.Device{IPs: tc.ips}, Networks: []string{"10.0.0.0/8"}}
+			if got := InNetworks(s, []string{"10.0.0.0/8"}); got != tc.want {
+				t.Fatalf("InNetworks=%v want %v", got, tc.want)
+			}
+			if got := matches(When{Networks: []string{"10.0.0.0/8"}}, s); got != tc.want {
+				t.Fatalf("rule matches=%v want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestTTLAndActionValidation(t *testing.T) {
+	for _, ttl := range []string{"1ns", "500ms", "999999999ns"} {
+		if _, err := New("rules", json.RawMessage(fmt.Sprintf(`{"rules":[{"name":"r","then":{"tier":"approve","action":"isolate","ttl":%q}}]}`, ttl))); err == nil {
+			t.Errorf("accepted TTL %s", ttl)
+		}
+	}
+	for _, ttl := range []string{"", "0s", "1s", "1500ms"} {
+		r, err := New("rules", json.RawMessage(fmt.Sprintf(`{"rules":[{"name":"r","then":{"tier":"approve","action":"isolate","ttl":%q}}]}`, ttl)))
+		if err != nil {
+			t.Fatal(ttl, err)
+		}
+		p, _, err := r.Decide(context.Background(), decide.Situation{})
+		if err != nil || (ttl == "" && p.TTL != 0) {
+			t.Fatal(p, err)
+		}
+	}
+	for _, action := range append(append([]string(nil), decide.KnownActions...), "", "delete", "isolte") {
+		_, err := New("rules", json.RawMessage(fmt.Sprintf(`{"rules":[{"name":"r","then":{"tier":"approve","action":%q}}]}`, action)))
+		unknown := action == "delete" || action == "isolte"
+		if (err != nil) != unknown {
+			t.Fatalf("action %q: %v", action, err)
+		}
+	}
+}

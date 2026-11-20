@@ -23,7 +23,13 @@ func installDecide(t *testing.T, s *Server, specs []registry.Spec) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	gs, e := registry.BuildAll(decide.Guards, DefaultGuards)
+	guardSpecs := append([]registry.Spec(nil), DefaultGuards...)
+	for i := range guardSpecs {
+		if guardSpecs[i].Type == "scope" {
+			guardSpecs[i].Settings = json.RawMessage(`{"networks":["10.1.2.0/24"]}`)
+		}
+	}
+	gs, e := registry.BuildAll(decide.Guards, guardSpecs)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -166,7 +172,7 @@ func TestActionsEndToEnd(t *testing.T) {
 	if e := s.MatchDevice(ctx, id); e != nil {
 		t.Fatal(e)
 	}
-	if len(list("pending")) != 0 || len(list("approved")) != 0 || len(list("resolved")) != 2 {
+	if len(list("pending")) != 0 || len(list("approved")) != 1 || len(list("resolved")) != 1 {
 		t.Fatalf("resolution %+v", list("all"))
 	}
 	events, e := s.st.ListEvents(ctx, 100)
@@ -189,7 +195,7 @@ func TestActionsAuthAndValidation(t *testing.T) {
 		}
 	}
 	doJSON(t, c, "POST", ts.URL+"/api/login", "", `{"user":"admin","password":"`+pw+`"}`, nil)
-	for _, path := range []string{"/api/proposals?state=bogus", "/api/proposals?device=bad", "/api/proposals?limit=0", "/api/proposals?limit=20001"} {
+	for _, path := range []string{"/api/proposals?state=bogus", "/api/proposals?state=pending,bogus", "/api/proposals?state=pending,", "/api/proposals?state=all,pending", "/api/proposals?device=bad", "/api/proposals?limit=0", "/api/proposals?limit=20001"} {
 		if code := doJSON(t, c, "GET", ts.URL+path, "", "", nil); code != 400 {
 			t.Fatal(path, code)
 		}

@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/JulianStremel/netnoodle/internal/intel"
@@ -79,6 +80,9 @@ type Proposal struct {
 	DecidedBy []string
 }
 
+// KnownActions are the reversible actions understood by the decision pipeline.
+var KnownActions = []string{"isolate", "block-port", "stop-service", "snapshot"}
+
 // Decider proposes an action for a situation. ok=false means "no opinion".
 type Decider interface {
 	Name() string
@@ -141,6 +145,9 @@ func Evaluate(ctx context.Context, ds []Decider, gs []Guard, s Situation) (Propo
 			errs = append(errs, fmt.Errorf("%s attempted a less safe tier", name))
 			return
 		}
+		if q.Action != "" && !slices.Contains(KnownActions, q.Action) {
+			q.Action = ""
+		}
 		changed := q.Tier != p.Tier
 		p.Tier = q.Tier
 		if q.Action == "" && p.Action != "" {
@@ -157,12 +164,15 @@ func Evaluate(ctx context.Context, ds []Decider, gs []Guard, s Situation) (Propo
 		}
 	}
 	invariant := func() {
+		if p.Action != "" && !slices.Contains(KnownActions, p.Action) {
+			p.Action = ""
+			addReason("unknown action")
+		}
 		if p.Action == "" && (p.Tier == TierAuto || p.Tier == TierApprove) {
 			p.Tier = TierNotify
 			addReason("no action specified")
 		}
-		reversible := p.Action == "isolate" || p.Action == "block-port" || p.Action == "stop-service" || p.Action == "snapshot"
-		if p.Tier == TierAuto && (p.TTL <= 0 || !reversible) {
+		if p.Tier == TierAuto && p.TTL <= 0 {
 			p.Tier = TierApprove
 			addReason("automatic actions require a reversible action and positive TTL")
 		}

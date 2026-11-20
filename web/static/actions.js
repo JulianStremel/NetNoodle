@@ -14,6 +14,7 @@ async function page(root) {
   const historyContent = el("div");
   history.append(el("div", { class: "filters" }, state, filter), historyContent);
   let rows = [];
+  const historyState = () => state.value === "all" ? "approved,rejected,expired,resolved,notify" : state.value;
   const act = async (p, decision, button) => {
     button.disabled = true;
     try {
@@ -42,20 +43,29 @@ async function page(root) {
   };
   const drawHistory = () => {
     const text = filter.value.trim().toLowerCase();
-    const list = rows.filter((p) => !["pending", "auto"].includes(p.state) && (state.value === "all" || p.state === state.value) &&
-      (!text || [p.device_name, p.vuln_id, p.action, p.reason].join(" ").toLowerCase().includes(text)));
+    const list = rows.filter((p) => !text || [p.device_name, p.vuln_id, p.action, p.reason].join(" ").toLowerCase().includes(text));
     queue(historyContent, "History", list);
   };
-  state.addEventListener("change", drawHistory);
+  let historyRequest = 0;
+  const loadHistory = async () => {
+    const request = ++historyRequest;
+    const proposals = await api(`/api/proposals?state=${historyState()}&limit=500`);
+    if (request !== historyRequest) return;
+    rows = proposals;
+    drawHistory();
+  };
+  state.addEventListener("change", () => loadHistory().catch((e) => { error.textContent = e.message; }));
   filter.addEventListener("input", drawHistory);
   const refresh = async () => {
-    const [settings, proposals] = await Promise.all([api("/api/decide/settings"), api("/api/proposals?limit=20000")]);
-    rows = proposals;
+    const [settings, pendingRows, autoRows] = await Promise.all([
+      api("/api/decide/settings"), api("/api/proposals?state=pending&limit=500"),
+      api("/api/proposals?state=auto&limit=500"), loadHistory(),
+    ]);
     const kill = el("input", { type: "checkbox" });
     kill.checked = settings.killswitch;
     kill.addEventListener("change", async () => {
       kill.disabled = true;
-      try { await api("/api/decide/settings", { method: "PUT", body: { killswitch: kill.checked } }); error.textContent = ""; }
+      try { await api("/api/decide/settings", { method: "PUT", body: { killswitch: kill.checked } }); error.textContent = ""; await refresh(); }
       catch (e) { error.textContent = e.message; kill.checked = !kill.checked; }
       finally { kill.disabled = false; }
     });
@@ -65,17 +75,16 @@ async function page(root) {
       catch (e) { error.textContent = e.message; }
       finally { reevaluate.disabled = false; }
     } }, "Re-evaluate findings");
-    const counts = ["pending", "auto", "approved", "rejected", "expired", "resolved", "notify"].map((s) => el("span", { class: "chip" }, `${s}: ${rows.filter((p) => p.state === s).length}`));
+    const counts = ["pending", "auto", "approved", "rejected", "expired", "resolved", "notify"].map((s) => el("span", { class: "chip" }, `${s}: ${settings.stats[s] || 0}`));
     header.replaceChildren(el("h2", {}, "Actions"),
       el("p", { class: "muted" }, "Actions are recorded only. Actors that execute them come in a later version."),
       el("div", { class: "filters" }, el("label", { class: "check" }, kill, "Kill switch: no automatic actions"), reevaluate,
         el("button", { class: "secondary", onclick: () => refresh().catch((e) => { error.textContent = e.message; }) }, "Refresh")),
       el("div", { class: "proposal-counts" }, counts),
-      rows.length === 20000 ? el("p", { class: "muted" }, "Showing the latest 20,000 proposals. Counts cover these records.") : "",
+      el("p", { class: "muted" }, "Showing up to 500 proposals per section. Counts include all records."),
       el("p", { class: "small muted" }, `Rules: ${settings.rules.join(", ") || "none"}. Guards: ${settings.guards.join(", ") || "none"}.`));
-    queue(pending, "Needs approval", rows.filter((p) => p.state === "pending"), true);
-    queue(automatic, "Would run automatically", rows.filter((p) => p.state === "auto"));
-    drawHistory();
+    queue(pending, "Needs approval", pendingRows, true);
+    queue(automatic, "Would run automatically", autoRows);
   };
   root.append(header, error, pending, automatic, history);
   await refresh();

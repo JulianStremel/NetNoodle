@@ -21,8 +21,13 @@ type guard struct {
 	perHour    int
 	settings   decide.Settings
 	mu         sync.Mutex
-	times      []time.Time
+	times      map[proposalKey]time.Time
 	now        func() time.Time
+}
+
+type proposalKey struct {
+	device       int64
+	vuln, action string
 }
 
 func init() {
@@ -76,22 +81,28 @@ func (g *guard) Check(ctx context.Context, s decide.Situation, p decide.Proposal
 			reason = "protected device requires approval"
 		}
 	case "scope":
-		if !slices.Contains(s.Device.Tags, "auto") && !rules.InNetworks(s, g.networks) {
+		// Tags cannot bypass the address boundary: every IP must be in scope.
+		if !rules.InNetworks(s, g.networks) {
 			reason = "outside automatic scope"
 		}
 	case "rate":
 		// Sliding window is in memory: restarting the server resets this limit.
 		g.mu.Lock()
 		now := g.now()
-		i := 0
-		for i < len(g.times) && !g.times[i].After(now.Add(-time.Hour)) {
-			i++
+		if g.times == nil {
+			g.times = map[proposalKey]time.Time{}
 		}
-		g.times = append([]time.Time(nil), g.times[i:]...)
-		if len(g.times) >= g.perHour {
+		for k, at := range g.times {
+			if !at.After(now.Add(-time.Hour)) {
+				delete(g.times, k)
+			}
+		}
+		key := proposalKey{s.Device.ID, s.Vuln.ID, p.Action}
+		_, seen := g.times[key]
+		if !seen && len(g.times) >= g.perHour {
 			reason = "hourly automatic proposal limit reached"
-		} else {
-			g.times = append(g.times, now)
+		} else if !seen {
+			g.times[key] = now
 		}
 		g.mu.Unlock()
 	case "killswitch":
@@ -103,7 +114,7 @@ func (g *guard) Check(ctx context.Context, s decide.Situation, p decide.Proposal
 			return p, e
 		}
 		if v == "on" {
-			reason = "kill switch is on"
+			reason = "kill switch"
 		}
 	}
 	if reason != "" {

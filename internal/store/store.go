@@ -364,13 +364,17 @@ type ProposalFilter struct {
 }
 type Proposals interface {
 	OpenVulnIDs(context.Context, int64) ([]string, error)
-	// UpsertProposal returns the saved record and whether it was inserted or changed state.
+	// UpsertProposal returns the saved record and whether it was inserted or
+	// a closed/notification row was reopened into pending/auto.
 	// Approved decisions retain their reviewed scope until M6.
 	UpsertProposal(context.Context, Proposal) (Proposal, bool, error)
 	ListProposals(context.Context, ProposalFilter) ([]Proposal, error)
+	ProposalStats(context.Context) (map[string]int, error)
+	PurgeProposals(context.Context, time.Time) error
 	GetProposal(context.Context, int64) (Proposal, error)
 	DecideProposal(context.Context, int64, string, string, time.Time) error
-	// ExpireProposals closes pending proposals created before the cutoff.
+	// ExpireProposals closes pending proposals whose seven-day approval window
+	// ended by cutoff+7d, using creation time for legacy rows without a deadline.
 	ExpireProposals(context.Context, time.Time) error
 	ResolveProposals(context.Context, int64, []string) error
 }

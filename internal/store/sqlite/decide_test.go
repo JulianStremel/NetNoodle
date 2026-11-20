@@ -99,15 +99,15 @@ func TestProposalsLifecycle(t *testing.T) {
 		t.Fatal(q)
 	}
 	q, _ = db.GetProposal(ctx, p.ID)
-	if q.State != "resolved" {
+	if q.State != "approved" {
 		t.Fatal(q)
 	}
-	input.Action = "isolate"
+	input.Action = "snapshot"
 	input.Tier = "approve"
 	input.State = "pending"
 	input.CreatedAt = now
 	r, _, e := db.UpsertProposal(ctx, input)
-	if e != nil || r.ID == p.ID {
+	if e != nil || r.ID != auto.ID {
 		t.Fatalf("reopened %+v %v", r, e)
 	}
 	if e = db.DecideProposal(ctx, r.ID, "rejected", "bob", now); e != nil {
@@ -209,7 +209,7 @@ func TestTagsSettingsAndMerge(t *testing.T) {
 		t.Fatal(ds, e)
 	}
 	ps, e := db.ListProposals(ctx, store.ProposalFilter{})
-	if e != nil || len(ps) != 4 {
+	if e != nil || len(ps) != 3 {
 		t.Fatal(ps, e)
 	}
 	open := 0
@@ -225,7 +225,7 @@ func TestTagsSettingsAndMerge(t *testing.T) {
 			approved++
 		}
 	}
-	if open != 2 || approved != 1 {
+	if open != 3 || approved != 1 {
 		t.Fatalf("open=%d approved=%d %+v", open, approved, ps)
 	}
 	if e = db.SetTags(ctx, keep, nil); e != nil {

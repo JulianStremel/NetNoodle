@@ -28,8 +28,9 @@ type When struct {
 	MinRelatedRisk *float64 `json:"min_related_risk"`
 }
 type Then struct {
-	Tier   string         `json:"tier"`
-	Action string         `json:"action"`
+	Tier   string `json:"tier"`
+	Action string `json:"action"`
+	// Approve rules may omit TTL: permanent until reverted by an operator.
 	TTL    string         `json:"ttl"`
 	Params map[string]any `json:"params"`
 }
@@ -64,9 +65,12 @@ func New(name string, raw json.RawMessage) (decide.Decider, error) {
 		if _, ok := tier(r.Then.Tier); !ok {
 			return nil, fmt.Errorf("%s: invalid tier", r.Name)
 		}
+		if r.Then.Action != "" && !slices.Contains(decide.KnownActions, r.Then.Action) {
+			return nil, fmt.Errorf("%s: unknown action %q", r.Name, r.Then.Action)
+		}
 		if r.Then.TTL != "" {
 			d, e := time.ParseDuration(r.Then.TTL)
-			if e != nil || d < 0 {
+			if e != nil || d < 0 || (d > 0 && d < time.Second) {
 				return nil, fmt.Errorf("%s: invalid TTL", r.Name)
 			}
 		}
@@ -114,29 +118,34 @@ func (r *Rules) RuleNames() []string {
 	return out
 }
 
-// InNetworks tests actual addresses when available, preserving narrow CIDR scope.
+// InNetworks fails closed: every address must belong to the configured networks.
+// Graph-derived network summaries cannot establish trust in a device's addresses.
 func InNetworks(s decide.Situation, networks []string) bool {
+	if len(s.Device.IPs) == 0 {
+		return false
+	}
+	prefixes := []netip.Prefix{}
 	for _, n := range networks {
 		p, e := netip.ParsePrefix(n)
 		if e != nil {
-			continue
+			return false
 		}
-		for _, ip := range s.Device.IPs {
-			a, e := netip.ParseAddr(ip)
-			if e == nil && p.Contains(a.Unmap()) {
-				return true
-			}
+		prefixes = append(prefixes, p)
+	}
+	for _, ip := range s.Device.IPs {
+		a, e := netip.ParseAddr(ip)
+		if e != nil {
+			return false
 		}
-		if len(s.Device.IPs) == 0 {
-			for _, n := range s.Networks {
-				v, e := netip.ParsePrefix(n)
-				if e == nil && p.Bits() <= v.Bits() && p.Contains(v.Addr()) {
-					return true
-				}
-			}
+		inside := false
+		for _, p := range prefixes {
+			inside = inside || p.Contains(a.Unmap())
+		}
+		if !inside {
+			return false
 		}
 	}
-	return false
+	return true
 }
 func matches(w When, s decide.Situation) bool {
 	if w.MinScore != nil && s.Vuln.Score < *w.MinScore || w.MaxScore != nil && s.Vuln.Score > *w.MaxScore || w.KEV != nil && s.Vuln.KEV != *w.KEV || w.MinEPSS != nil && s.Vuln.EPSS < *w.MinEPSS || w.Exposed != nil && s.Device.Exposed != *w.Exposed || w.Confidence != "" && s.Confidence != w.Confidence || w.MinRelatedRisk != nil && s.RelatedRisk < *w.MinRelatedRisk {

@@ -8,11 +8,56 @@ import (
 	"time"
 
 	"github.com/JulianStremel/netnoodle/internal/decide"
+	"github.com/JulianStremel/netnoodle/internal/intel"
 )
 
 type settings struct {
 	v   string
 	err error
+}
+
+func TestScopeTrustRequiresAllAddresses(t *testing.T) {
+	g := build(t, "scope", `{"networks":["10.0.0.0/8"]}`)
+	for _, tags := range [][]string{nil, {"auto"}} {
+		for _, ips := range [][]string{nil, {"10.1.2.3", "203.0.113.1"}, {"10.1.2.3", "bad"}} {
+			p, err := g.Check(context.Background(), decide.Situation{Device: decide.Device{IPs: ips, Tags: tags}, Networks: []string{"10.0.0.0/8"}}, decide.Proposal{Tier: decide.TierAuto})
+			if err != nil || p.Tier != decide.TierApprove {
+				t.Fatal(ips, tags, p, err)
+			}
+		}
+	}
+}
+
+func TestRateCountsDistinctProposalKeys(t *testing.T) {
+	g := build(t, "rate", `{"per_hour":3}`)
+	now := time.Now()
+	g.now = func() time.Time { return now }
+	s := decide.Situation{Device: decide.Device{ID: 1}, Vuln: intel.Vuln{ID: "v1"}}
+	p := decide.Proposal{Tier: decide.TierAuto, Action: "isolate"}
+	check := func(s decide.Situation, p decide.Proposal, want decide.Tier) {
+		t.Helper()
+		out, err := g.Check(context.Background(), s, p)
+		if err != nil || out.Tier != want {
+			t.Fatal(out, err)
+		}
+	}
+	for range 100 {
+		check(s, p, decide.TierAuto)
+	}
+	s.Vuln.ID = "v2"
+	check(s, p, decide.TierAuto)
+	p.Action = "snapshot"
+	check(s, p, decide.TierAuto)
+	s.Device.ID = 2
+	check(s, p, decide.TierApprove)
+	s.Device.ID = 1
+	check(s, p, decide.TierAuto) // Existing keys still pass at capacity.
+	now = now.Add(time.Hour)
+	s.Device.ID = 2
+	check(s, p, decide.TierAuto)
+	if len(g.times) != 1 {
+		t.Fatal("expired keys retained", g.times)
+	}
 }
 
 func (s settings) GetSetting(context.Context, string) (string, error) { return s.v, s.err }
@@ -35,7 +80,7 @@ func TestGuards(t *testing.T) {
 		{"protected", `{}`, decide.Situation{Device: decide.Device{Tags: []string{"protected"}}}, decide.TierApprove},
 		{"protected", `{}`, decide.Situation{}, decide.TierAuto},
 		{"scope", `{}`, decide.Situation{}, decide.TierApprove},
-		{"scope", `{}`, decide.Situation{Device: decide.Device{Tags: []string{"auto"}}}, decide.TierAuto},
+		{"scope", `{}`, decide.Situation{Device: decide.Device{Tags: []string{"auto"}}}, decide.TierApprove},
 		{"scope", `{"networks":["10.1.2.3/32"]}`, decide.Situation{Device: decide.Device{IPs: []string{"10.1.2.3"}}}, decide.TierAuto},
 		{"scope", `{"networks":["10.1.2.3/32"]}`, decide.Situation{Device: decide.Device{IPs: []string{"10.1.2.4"}}}, decide.TierApprove},
 	} {

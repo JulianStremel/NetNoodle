@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/JulianStremel/netnoodle/internal/store"
 )
@@ -33,6 +34,7 @@ func (s *Server) handleSetTags(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	s.invalidateDecisionContext()
 	tags, e := s.st.Tags(r.Context(), id)
 	if e != nil {
 		writeErr(w, 500, "internal error")
@@ -45,11 +47,15 @@ func (s *Server) handleSetTags(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleProposals(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	f := store.ProposalFilter{State: q.Get("state")}
-	switch f.State {
-	case "", "all", "notify", "auto", "pending", "approved", "rejected", "expired", "resolved":
-	default:
-		writeErr(w, 400, "bad state")
-		return
+	if f.State != "" && f.State != "all" {
+		for _, state := range strings.Split(f.State, ",") {
+			switch state {
+			case "notify", "auto", "pending", "approved", "rejected", "expired", "resolved":
+			default:
+				writeErr(w, 400, "bad state")
+				return
+			}
+		}
 	}
 	if v := q.Get("device"); v != "" {
 		n, e := strconv.ParseInt(v, 10, 64)
@@ -129,7 +135,12 @@ func (s *Server) handleDecideSettings(w http.ResponseWriter, r *http.Request) {
 		guards = append(guards, g.Name())
 	}
 	s.decide.mu.Unlock()
-	writeJSON(w, 200, map[string]any{"killswitch": v == "on", "rules": names, "guards": guards})
+	stats, e := s.st.ProposalStats(r.Context())
+	if e != nil {
+		writeErr(w, 500, "internal error")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"killswitch": v == "on", "rules": names, "guards": guards, "stats": stats})
 }
 func (s *Server) handleSetDecideSettings(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -143,7 +154,10 @@ func (s *Server) handleSetDecideSettings(w http.ResponseWriter, r *http.Request)
 	if *req.Killswitch {
 		v = "on"
 	}
-	if e := s.st.SetSetting(r.Context(), "decide.killswitch", v); e != nil {
+	s.decide.run.Lock()
+	e := s.st.SetSetting(r.Context(), "decide.killswitch", v)
+	s.decide.run.Unlock()
+	if e != nil {
 		writeErr(w, 500, "internal error")
 		return
 	}

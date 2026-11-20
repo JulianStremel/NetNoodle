@@ -250,9 +250,8 @@ func (t *invTx) Merge(keep, drop int64) error {
 		{`UPDATE OR IGNORE device_sources SET device_id = ? WHERE device_id = ?`, []any{keep, drop}},
 		{`UPDATE devices SET parent_id = ? WHERE parent_id = ? AND id <> ?`, []any{keep, drop, keep}},
 		{`INSERT OR IGNORE INTO device_tags(device_id,tag) SELECT ?,tag FROM device_tags WHERE device_id=?`, []any{keep, drop}},
-		// Keep both histories. Close only colliding open proposals before moving.
-		{`UPDATE proposals SET state='resolved',updated_at=? WHERE device_id=? AND state IN ('pending','auto') AND EXISTS (SELECT 1 FROM proposals d WHERE d.device_id=? AND d.vuln_id=proposals.vuln_id AND d.action=proposals.action AND (d.state='approved' OR (d.state='pending' AND proposals.state='auto')))`, []any{ts(time.Now()), keep, drop}},
-		{`UPDATE proposals SET state='resolved',updated_at=? WHERE device_id=? AND state IN ('pending','approved','auto') AND EXISTS (SELECT 1 FROM proposals k WHERE k.device_id=? AND k.vuln_id=proposals.vuln_id AND k.action=proposals.action AND k.state IN ('pending','approved','auto'))`, []any{ts(time.Now()), drop, keep}},
+		// Preserve operator decisions; retain the destination's mutable row on collision.
+		{`DELETE FROM proposals WHERE device_id=? AND state NOT IN ('approved','rejected') AND EXISTS (SELECT 1 FROM proposals k WHERE k.device_id=? AND k.vuln_id=proposals.vuln_id AND k.action=proposals.action AND k.state NOT IN ('approved','rejected'))`, []any{drop, keep}},
 		{`UPDATE proposals SET device_id=? WHERE device_id=?`, []any{keep, drop}},
 		{`DELETE FROM devices WHERE id = ?`, []any{drop}},
 		{`UPDATE devices SET kind = ?, name = ?, parent_id = ?, attributes = ?, interfaces = ?, first_seen = ?, last_seen = ? WHERE id = ?`,

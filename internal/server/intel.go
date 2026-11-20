@@ -209,8 +209,6 @@ const maxHitsPerDevice = 50000
 // MatchDevice runs all matchers for one device and stores the findings.
 // A matcher that fails leaves the device's earlier findings unchanged.
 func (s *Server) MatchDevice(ctx context.Context, id int64) error {
-	s.decide.run.Lock()
-	defer s.decide.run.Unlock()
 	ms, es := s.intelPlugins()
 	comps, err := s.st.DeviceComponents(ctx, id)
 	if err != nil {

@@ -33,7 +33,8 @@ func TestEvaluateInvariants(t *testing.T) {
 		tier, want   Tier
 	}{
 		{"no TTL", "isolate", 0, TierAuto, TierApprove},
-		{"irreversible", "delete", 60, TierAuto, TierApprove},
+		{"unknown auto", "delete", 60, TierAuto, TierNotify},
+		{"unknown approve", "delete", 0, TierApprove, TierNotify},
 		{"empty auto", "", 60, TierAuto, TierNotify},
 		{"empty approve", "", 0, TierApprove, TierNotify},
 		{"reversible", "snapshot", 60, TierAuto, TierAuto},
@@ -45,6 +46,27 @@ func TestEvaluateInvariants(t *testing.T) {
 				t.Fatalf("%+v %v %v", p, ok, e)
 			}
 		})
+	}
+}
+
+func TestKnownActions(t *testing.T) {
+	if !reflect.DeepEqual(KnownActions, []string{"isolate", "block-port", "stop-service", "snapshot"}) {
+		t.Fatal(KnownActions)
+	}
+	for _, action := range KnownActions {
+		p, ok, err := Evaluate(context.Background(), []Decider{testDecider{"rules", Proposal{Tier: TierAuto, Action: action, TTL: 1}, true, nil}}, nil, Situation{})
+		if err != nil || !ok || p.Tier != TierAuto || p.Action != action {
+			t.Fatal(p, ok, err)
+		}
+	}
+	base := testDecider{"base", Proposal{Tier: TierAuto, Action: "isolate", TTL: 1}, true, nil}
+	p, _, err := Evaluate(context.Background(), []Decider{base, testDecider{"unknown", Proposal{Tier: TierAuto, Action: "delete"}, true, nil}}, nil, Situation{})
+	if err != nil || p.Action != "" || p.Tier != TierNotify {
+		t.Fatal(p, err)
+	}
+	p, _, err = Evaluate(context.Background(), []Decider{base}, []Guard{testGuard{"unknown", func(p Proposal) (Proposal, error) { p.Action = "delete"; return p, nil }}}, Situation{})
+	if err != nil || p.Action != "" || p.Tier != TierNotify {
+		t.Fatal(p, err)
 	}
 }
 func TestEvaluateMonotonic(t *testing.T) {

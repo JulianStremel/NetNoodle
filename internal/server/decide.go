@@ -15,6 +15,9 @@ import (
 type decideState struct {
 	mu           sync.Mutex
 	run          sync.Mutex
+	contextMu    sync.Mutex
+	nodes        map[int64]GraphNode
+	nodesAt      time.Time
 	deciders     []decide.Decider
 	guards       []decide.Guard
 	reevaluating bool
@@ -39,6 +42,11 @@ const maxEvaluationsPerDevice = 2000
 
 // decisionContext reuses the graph's network and related-risk calculation.
 func (s *Server) decisionContext(ctx context.Context) (map[int64]GraphNode, error) {
+	s.decide.contextMu.Lock()
+	defer s.decide.contextMu.Unlock()
+	if s.decide.nodes != nil && s.now().Sub(s.decide.nodesAt) < 30*time.Second {
+		return s.decide.nodes, nil
+	}
 	devs, e := s.st.ListDevices(ctx)
 	if e != nil {
 		return nil, e
@@ -52,7 +60,14 @@ func (s *Server) decisionContext(ctx context.Context) (map[int64]GraphNode, erro
 	for _, n := range g.Nodes {
 		out[n.ID] = n
 	}
+	s.decide.nodes, s.decide.nodesAt = out, s.now()
 	return out, nil
+}
+
+func (s *Server) invalidateDecisionContext() {
+	s.decide.contextMu.Lock()
+	s.decide.nodes = nil
+	s.decide.contextMu.Unlock()
 }
 func (s *Server) evaluateFindings(ctx context.Context, fs []store.FindingRow, nodes map[int64]GraphNode, batch *proposalBatch) error {
 	s.decide.mu.Lock()
@@ -92,26 +107,47 @@ func (s *Server) evaluateFindings(ctx context.Context, fs []store.FindingRow, no
 				}
 			}
 		}
-		p, ok, e := decide.Evaluate(ctx, ds, gs, decide.Situation{Device: device, Component: f.PURL, Confidence: f.Confidence, Networks: n.Networks, RelatedRisk: n.RelatedRisk, Vuln: intel.Vuln{ID: f.VulnID, Aliases: f.Aliases, Summary: f.Summary, Score: f.Score, Vector: f.Vector, KEV: f.KEV, EPSS: f.EPSS, EPSSPct: f.EPSSPct, Facts: f.Facts}})
-		if e != nil {
-			s.log.Warn("evaluate proposal", "device", d.ID, "vuln", f.VulnID, "err", e)
-		}
-		if !ok || p.Tier == decide.TierNone {
-			continue
-		}
-		state := p.Tier.String()
-		if p.Tier == decide.TierApprove {
-			state = "pending"
-		}
-		saved, fresh, e := s.st.UpsertProposal(ctx, store.Proposal{DeviceID: d.ID, VulnID: f.VulnID, PURL: f.PURL, Action: p.Action, Tier: p.Tier.String(), State: state, Reason: p.Reason, DecidedBy: p.DecidedBy, Params: p.Params, TTL: p.TTL, CreatedAt: s.now()})
-		if e != nil {
+		if e := s.evaluateSituation(ctx, ds, gs, f, decide.Situation{Device: device, Component: f.PURL, Confidence: f.Confidence, Networks: n.Networks, RelatedRisk: n.RelatedRisk, Vuln: intel.Vuln{ID: f.VulnID, Aliases: f.Aliases, Summary: f.Summary, Score: f.Score, Vector: f.Vector, KEV: f.KEV, EPSS: f.EPSS, EPSSPct: f.EPSSPct, Facts: f.Facts}}, batch); e != nil {
 			return e
 		}
-		if fresh && (saved.State == "pending" || saved.State == "notify") {
-			batch.add(saved)
+	}
+	return nil
+}
+
+// Serialize only evaluation and persistence, one finding at a time. Matchers,
+// graph construction and the rest of a re-evaluation run never hold this lock.
+func (s *Server) evaluateSituation(ctx context.Context, ds []decide.Decider, gs []decide.Guard, f store.FindingRow, situation decide.Situation, batch *proposalBatch) error {
+	s.decide.run.Lock()
+	defer s.decide.run.Unlock()
+	p, ok, e := decide.Evaluate(ctx, ds, gs, situation)
+	if e != nil {
+		s.log.Warn("evaluate proposal", "device", f.DeviceID, "vuln", f.VulnID, "err", e)
+	}
+	if !ok || p.Tier == decide.TierNone {
+		return nil
+	}
+	// This invariant is independent of the configurable guards and runs last.
+	if p.Tier == decide.TierAuto {
+		v, err := s.st.GetSetting(ctx, "decide.killswitch")
+		if err != nil {
+			return err
+		}
+		if v == "on" {
+			p.Tier = decide.TierApprove
+			p.Reason = "kill switch"
 		}
 	}
-
+	state := p.Tier.String()
+	if p.Tier == decide.TierApprove {
+		state = "pending"
+	}
+	saved, fresh, e := s.st.UpsertProposal(ctx, store.Proposal{DeviceID: f.DeviceID, VulnID: f.VulnID, PURL: f.PURL, Action: p.Action, Tier: p.Tier.String(), State: state, Reason: p.Reason, DecidedBy: p.DecidedBy, Params: p.Params, TTL: p.TTL, CreatedAt: s.now()})
+	if e != nil {
+		return e
+	}
+	if fresh && (saved.State == "pending" || saved.State == "notify") {
+		batch.add(saved)
+	}
 	return nil
 }
 
@@ -167,8 +203,6 @@ func (s *Server) resolveDeviceProposals(ctx context.Context, id int64) error {
 	return s.st.ResolveProposals(ctx, id, open)
 }
 func (s *Server) reevaluate(ctx context.Context) error {
-	s.decide.run.Lock()
-	defer s.decide.run.Unlock()
 	batch := newProposalBatch()
 	defer s.emitProposalBatch(ctx, batch)
 	nodes, e := s.decisionContext(ctx)
