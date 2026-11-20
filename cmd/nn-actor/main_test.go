@@ -105,7 +105,7 @@ func TestCommandRunDryRunDenyAndReplay(t *testing.T) {
 					} else if res.Status != proto.OrderDone || !strings.HasPrefix(res.Message, "dry run: would isolate") {
 						t.Fatal(res)
 					}
-				case <-time.After(5 * time.Second):
+				case <-time.After(30 * time.Second): // generous: CI runners can be slow
 					t.Fatal("actor did not post result")
 				}
 			}

@@ -49,9 +49,13 @@ func TestSymlinkRequestRefused(t *testing.T) {
 	if e := u.RunOnce(context.Background()); e != nil {
 		t.Fatal(e)
 	}
-	s := readStatus(t, u, req.ID)
-	if s.State != "rejected" || len(r.calls) != 0 {
-		t.Fatal(s, r.calls)
+	// A request that is not a regular file is deleted before it is read
+	// (security review 2026-11-20); nothing runs and no status is written.
+	if _, e := os.Lstat(request); !os.IsNotExist(e) || len(r.calls) != 0 {
+		t.Fatal("symlink request kept or processed", e, r.calls)
+	}
+	if _, e := os.Stat(u.Config.SharedDir + "/status/" + req.ID + ".json"); !os.IsNotExist(e) {
+		t.Fatal("status written for a symlink request", e)
 	}
 	b, e := os.ReadFile(target)
 	if e != nil || !strings.Contains(string(b), "private") {

@@ -44,4 +44,15 @@ else
   echo "== rust (linux): SKIPPED (no Docker; set up Docker or run on Linux)"
 fi
 
+# Go tests on Linux too when this host is not Linux: symlink, mode bit and
+# nftables behavior differs (a Linux-only test failure reached CI once).
+if [ "$(uname -s)" != "Linux" ] && [ -z "${NN_SKIP_DOCKER:-}" ] && command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  echo "== go (linux): test in Docker"
+  src=$(pwd -W 2>/dev/null || pwd)
+  MSYS_NO_PATHCONV=1 docker run --rm -e GOFLAGS=-buildvcs=false -v "$src:/src:ro" -v nn-gocache:/root/.cache -v nn-gomod:/go/pkg/mod -w /src golang:1.27-alpine go test ./... >"${TMPDIR:-/tmp}/nn-go-linux.log" 2>&1 || {
+    grep -vE '^ok|no test files' "${TMPDIR:-/tmp}/nn-go-linux.log"
+    exit 1
+  }
+fi
+
 echo "ALL CHECKS PASSED"

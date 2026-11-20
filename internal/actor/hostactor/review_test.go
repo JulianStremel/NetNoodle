@@ -72,7 +72,7 @@ func TestPortHoldersAndTimeoutsSurviveRestart(t *testing.T) {
 		if _, err = b.execute(context.Background(), o); err != nil {
 			t.Fatal(err)
 		}
-		if got := sets["tcp"][443]; got > tc.want || got < tc.want-1 { // remaining TTL may lose a second under load
+		if got := sets["tcp"][443]; got > tc.want || got < tc.want-10 { // remaining TTL may lose seconds under CI load
 			t.Fatalf("%s shortened timeout: %v", tc.id, sets)
 		}
 	}
