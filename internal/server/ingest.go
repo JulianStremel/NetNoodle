@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/JulianStremel/netnoodle/internal/inventory"
 	"github.com/JulianStremel/netnoodle/internal/notify"
@@ -20,6 +21,13 @@ import (
 // maxObservation is the largest observation body. An agent report of a
 // host with many packages is a few MiB.
 const maxObservation = 64 << 20
+
+// maxAgentObservation is the limit for agent peers. Sources (for example a
+// large UniFi or Proxmox import) may use maxObservation.
+const maxAgentObservation = 16 << 20
+
+// maxIngestReads is the number of observation bodies read at the same time.
+const maxIngestReads = 4
 
 // maxStoredRaw is the largest raw observation kept for audit. Larger
 // payloads are recorded as a size note only.
@@ -113,6 +121,18 @@ func (s *Server) handleObservations(w http.ResponseWriter, r *http.Request) {
 	p, _ := peerFrom(r.Context())
 	if !s.peerRate.allow(strconv.FormatInt(p.ID, 10), s.now()) {
 		writeErr(w, http.StatusTooManyRequests, "too many observations from this peer")
+		return
+	}
+	if p.Role == store.RoleAgent {
+		r.Body = http.MaxBytesReader(w, r.Body, maxAgentObservation)
+	}
+	select {
+	case s.ingestSlots <- struct{}{}:
+		defer func() { <-s.ingestSlots }()
+	case <-time.After(30 * time.Second):
+		writeErr(w, http.StatusServiceUnavailable, "server busy, retry later")
+		return
+	case <-r.Context().Done():
 		return
 	}
 	raw, err := io.ReadAll(r.Body)

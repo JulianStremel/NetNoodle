@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/JulianStremel/netnoodle/internal/decide/rules"
@@ -49,6 +50,7 @@ type Config struct {
 var (
 	DefaultDeciders  = []registry.Spec{{Type: "rules", Name: "rules", Settings: rules.DefaultRules}}
 	DefaultGuards    = []registry.Spec{{Type: "protected"}, {Type: "scope"}, {Type: "rate"}, {Type: "killswitch"}}
+	MandatoryGuards  = []string{"protected", "scope", "killswitch"}
 	DefaultMatchers  = []registry.Spec{{Type: "osv", Name: "osv"}, {Type: "msrc", Name: "msrc"}}
 	DefaultEnrichers = []registry.Spec{{Type: "kev", Name: "kev"}, {Type: "epss", Name: "epss"}}
 )
@@ -90,6 +92,13 @@ func (c *Config) applyIntelDefaults() {
 	}
 	if c.Guards == nil {
 		c.Guards = DefaultGuards
+	}
+	// The protected, scope and kill switch guards cannot be removed by
+	// configuration (security review 2026-11-20); only settings of them.
+	for _, kind := range MandatoryGuards {
+		if !slices.ContainsFunc(c.Guards, func(g registry.Spec) bool { return g.Type == kind }) {
+			c.Guards = append(c.Guards, registry.Spec{Type: kind})
+		}
 	}
 	if c.Matchers == nil {
 		c.Matchers = DefaultMatchers

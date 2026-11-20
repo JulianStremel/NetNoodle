@@ -22,6 +22,8 @@ For each new finding, the server decides on an action. In this version the serve
    - `scope`: an automatic action is permitted only for devices with the tag `auto` or in the configured networks.
    - `rate`: at most 10 automatic actions in one hour.
    - `killswitch`: when the kill switch on the **Actions** page is on, no action is automatic.
+
+   You can change the settings of the guards in the configuration (`guards`). You cannot remove `protected`, `scope` and `killswitch`. If they are not in the list, the server adds them.
 3. An automatic action must be reversible (`isolate`, `block-port`, `stop-service`, `snapshot`) and must have a time limit (TTL). If not, it needs approval. Configuration cannot change this.
 
 The **Actions** page shows the decisions that need approval, with **Approve** and **Reject**. To set the tags of a device, open the device page.
@@ -56,7 +58,7 @@ Backend `unifi` (block a client in UniFi Network, action `isolate`, revert `unis
 
 - Make a local API key on the UniFi console and write it to a file that only the actor can read (`api_key_file`).
 - Write the SHA-256 fingerprint of the console certificate in `fingerprint`.
-- Write the MAC addresses that must never be blocked (gateway, your administrator computer) in `never_block`. The backend also refuses to block UniFi devices.
+- Write the MAC addresses that must never be blocked (gateway, UniFi console, netnoodle server, your administrator computer) in `never_block`. The backend does not start if `never_block` is empty. The backend also refuses to block UniFi devices. In a container, the backend sees only the MAC addresses of the container, thus it cannot find the MAC addresses of the host.
 - The backend uses the command `block-sta` of the classic Network API. Ubiquiti does not document this command. Test it with `dry_run: false` on a client that is not important before you use it.
 
 Backend `proxmox` (Proxmox VE guests, target `proxmox.guest`): refer to [deploy/nn-actor.proxmox.example.json](../../deploy/nn-actor.proxmox.example.json).
@@ -69,7 +71,7 @@ Backend `proxmox` (Proxmox VE guests, target `proxmox.guest`): refer to [deploy/
 Backend `host` (on the Linux host itself, target `agent=<name of the agent of this host>`): refer to [deploy/nn-actor.host.example.json](../../deploy/nn-actor.host.example.json) and [deploy/nn-actor-host.service](../../deploy/nn-actor-host.service).
 
 - `block-port` adds the ports to sets of its own nftables table `inet netnoodle` and drops incoming packets to them. Each entry has a time limit (the TTL of the order, at most `max_ttl`). Thus the block ends also if the revert order does not arrive. `unblock-port` removes the entries.
-- Port 22 is never blocked (setting `never_block_ports`), so that you can still log in.
+- Ports 22, 7443 and 7444 are never blocked (setting `never_block_ports`), so that you can still log in and the actor can still get the revert order. The backend does not start with an empty `never_block_ports`, unless you set `allow_empty_never_block_ports`. The server also never sends a block for port 22, 7443, 7444 or for its own listen port.
 - `stop-service` and `start-service` are permitted only for the units in `services`. They need root or a polkit rule. The service unit in `deploy/` gives only `CAP_NET_ADMIN`, which is sufficient for `block-port`.
 
 When you approve a decision on the **Actions** page, the server sends an order to an actor that can do the action for the device. The **Actions** page shows the state of the order. After the TTL, the server sends the revert order.

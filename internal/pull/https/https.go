@@ -24,7 +24,7 @@ import (
 
 // Limits of one pull.
 const (
-	MaxReport   = 64 << 20
+	MaxReport   = 16 << 20 // same as an agent push (security review 2026-11-20)
 	maxPairBody = 4 << 10
 	pullTimeout = 2 * time.Minute
 	pairTimeout = 20 * time.Second

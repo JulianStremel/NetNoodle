@@ -103,7 +103,7 @@ func (f *fixture) serve(t *testing.T) *httptest.Server {
 
 func serverSettings(srv *httptest.Server) Settings {
 	fp := sha256.Sum256(srv.Certificate().Raw)
-	return Settings{URL: srv.URL, APIKey: testKey, Fingerprint: hex.EncodeToString(fp[:]), Site: "default", ClassicPath: "/proxy/network/api"}
+	return Settings{URL: srv.URL, APIKey: testKey, Fingerprint: hex.EncodeToString(fp[:]), Site: "default", ClassicPath: "/proxy/network/api", AllowEmptyNeverBlock: true}
 }
 
 func build(t *testing.T, s Settings) *Backend {
@@ -333,7 +333,10 @@ func TestSettings(t *testing.T) {
 			t.Errorf("settings accepted or unsafe error: %v", err)
 		}
 	}
-	b, err := New("defaults", json.RawMessage(`{"url":"https://example.com/","api_key":"`+testKey+`"}`))
+	if _, err := New("unprotected", json.RawMessage(`{"url":"https://example.com/","api_key":"`+testKey+`"}`)); err == nil || !strings.Contains(err.Error(), "never_block") {
+		t.Fatalf("missing never_block accepted: %v", err)
+	}
+	b, err := New("defaults", json.RawMessage(`{"url":"https://example.com/","api_key":"`+testKey+`","never_block":["aa:bb:cc:dd:ee:01"]}`))
 	if err != nil {
 		t.Fatal(err)
 	}

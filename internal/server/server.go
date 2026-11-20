@@ -20,7 +20,10 @@ import (
 
 // Server holds the HTTP handlers and their dependencies.
 type Server struct {
-	updateMu    sync.Mutex
+	updateMu sync.Mutex
+	// ingestSlots bounds how many observation bodies are read at the same
+	// time (security review 2026-11-20: 60 parallel 64 MiB bodies).
+	ingestSlots chan struct{}
 	cfg         Config
 	st          store.Store
 	log         *slog.Logger
@@ -54,6 +57,7 @@ func New(cfg Config, st store.Store, ui fs.FS, fingerprint string, log *slog.Log
 		bcryptSem:   make(chan struct{}, 4),
 		notifySem:   make(chan struct{}, 8),
 		peerRate:    newRateLimiter(60, 10*time.Minute),
+		ingestSlots: make(chan struct{}, maxIngestReads),
 		reserved:    reservedNames(cfg),
 		intel:       newIntelState(),
 		decide:      newDecideState(),

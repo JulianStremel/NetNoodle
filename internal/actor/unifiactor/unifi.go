@@ -39,6 +39,8 @@ type Settings struct {
 	ClassicPath     string   `json:"classic_path"`
 	ProtectMACsFile string   `json:"protect_macs_file"`
 	NeverBlock      []string `json:"never_block"`
+	// AllowEmptyNeverBlock permits a configuration without protected MACs.
+	AllowEmptyNeverBlock bool `json:"allow_empty_never_block"`
 }
 
 // Backend implements the isolate and unisolate actions for MAC targets.
@@ -93,6 +95,11 @@ func New(name string, raw json.RawMessage) (actor.Backend, error) {
 			return nil, errors.New("unifi: cannot read protect_macs_file")
 		}
 		s.NeverBlock = append(s.NeverBlock, strings.Fields(string(data))...)
+	}
+	// Local MACs below are added automatically, but in a container they are
+	// only the container's MACs (security review 2026-11-20).
+	if len(s.NeverBlock) == 0 && !s.AllowEmptyNeverBlock {
+		return nil, errors.New("unifi: never_block (or protect_macs_file) must protect the gateway, the controller and the server; explicitly set allow_empty_never_block to override")
 	}
 	interfaces, e := net.Interfaces()
 	if e != nil {

@@ -225,7 +225,8 @@ func TestDecideConfigDefaults(t *testing.T) {
 		t.Fatal(e)
 	}
 	cfg, e = LoadConfig(p)
-	if e != nil || len(cfg.Deciders) != 0 || len(cfg.Guards) != 0 {
+	// "guards": [] removes only the optional rate guard (security review 2026-11-20).
+	if e != nil || len(cfg.Deciders) != 0 || len(cfg.Guards) != len(MandatoryGuards) {
 		t.Fatal(cfg, e)
 	}
 	if _, e = registry.BuildAll(decide.Deciders, DefaultDeciders); e != nil {

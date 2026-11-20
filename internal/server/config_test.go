@@ -4,7 +4,10 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
+
+	"github.com/JulianStremel/netnoodle/internal/registry"
 )
 
 func TestStoreConfig(t *testing.T) {
@@ -49,6 +52,18 @@ func TestStoreConfig(t *testing.T) {
 		cfg, err := LoadConfig(path)
 		if err != nil || cfg.Store.Type != "sqlite" {
 			t.Fatal(cfg.Store, err)
+		}
+	}
+}
+
+// TestMandatoryGuards: an explicit guard list cannot remove the protected,
+// scope and kill switch guards (security review 2026-11-20).
+func TestMandatoryGuards(t *testing.T) {
+	c := Config{Guards: []registry.Spec{{Type: "rate"}}}
+	c.applyIntelDefaults()
+	for _, kind := range MandatoryGuards {
+		if !slices.ContainsFunc(c.Guards, func(g registry.Spec) bool { return g.Type == kind }) {
+			t.Fatalf("guard %s missing: %+v", kind, c.Guards)
 		}
 	}
 }
