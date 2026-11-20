@@ -48,14 +48,17 @@ func (t Tier) String() string {
 
 // Device is the device context a decider can see.
 type Device struct {
-	ID       int64
-	Name     string
-	Kind     string
-	Tags     []string
-	IPs      []string
-	Exposed  bool  // the vulnerable component backs a listening service
-	Ports    []int // listening ports of that component
-	ParentID int64
+	ID      int64
+	Name    string
+	Kind    string
+	Tags    []string
+	IPs     []string
+	Exposed bool  // the vulnerable component backs a listening service
+	Ports   []int // listening ports of that component
+	// Listeners are the exposed listeners of that component as
+	// "port/proto", for example "443/tcp" (params of block-port).
+	Listeners []string
+	ParentID  int64
 }
 
 // Situation is one finding (vulnerability on a device) to decide on.

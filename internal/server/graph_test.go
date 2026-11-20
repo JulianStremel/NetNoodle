@@ -74,3 +74,16 @@ func TestBuildGraphManyGuests(t *testing.T) {
 		t.Fatalf("related entries = %d", total)
 	}
 }
+
+func TestFindingSituationListeners(t *testing.T) {
+	d := store.DeviceDetail{ID: 1, Services: []store.ServiceRow{
+		{Service: proto.Service{Port: 443, Proto: "tcp", Address: "0.0.0.0", Component: "pkg:deb/debian/nginx@1"}},
+		{Service: proto.Service{Port: 443, Proto: "udp", Address: "::", Component: "pkg:deb/debian/nginx@1"}},
+		{Service: proto.Service{Port: 8080, Proto: "tcp", Address: "127.0.0.1", Component: "pkg:deb/debian/nginx@1"}},
+		{Service: proto.Service{Port: 22, Proto: "tcp", Address: "0.0.0.0", Component: "pkg:deb/debian/openssh-server@1"}},
+	}}
+	s := findingSituation(d, store.FindingRow{Finding: store.Finding{PURL: "pkg:deb/debian/nginx@1"}}, GraphNode{})
+	if !slices.Equal(s.Device.Listeners, []string{"443/tcp", "443/udp"}) || !s.Device.Exposed {
+		t.Fatalf("listeners = %v", s.Device.Listeners)
+	}
+}

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -113,6 +114,22 @@ func (s *Server) evaluateSituation(ctx context.Context, ds []decide.Decider, gs 
 	}
 	if !ok || p.Tier == decide.TierNone {
 		return nil
+	}
+	// block-port needs the ports. The server fills them from the exposed
+	// listeners of the vulnerable package; without any, nothing can be
+	// blocked, so the proposal is only a notification.
+	if p.Action == "block-port" {
+		if _, set := p.Params["ports"]; !set {
+			if len(situation.Device.Listeners) == 0 {
+				p.Tier, p.Action = decide.TierNotify, ""
+				p.Reason = strings.TrimPrefix(p.Reason+"; no exposed port to block", "; ")
+			} else {
+				if p.Params == nil {
+					p.Params = map[string]any{}
+				}
+				p.Params["ports"] = situation.Device.Listeners
+			}
+		}
 	}
 	// This invariant is independent of the configurable guards and runs last.
 	if p.Tier == decide.TierAuto {
@@ -226,12 +243,18 @@ func (s *Server) startReevaluate() {
 func findingSituation(d store.DeviceDetail, f store.FindingRow, n GraphNode) decide.Situation {
 	device := decide.Device{ID: d.ID, Name: d.Name, Kind: d.Kind, Tags: d.Tags, ParentID: d.ParentID, IPs: n.IPs}
 	seenPorts := map[int]bool{}
+	seenListeners := map[string]bool{}
 	for _, svc := range d.Services {
 		if svc.Component == f.PURL && isExposed(svc.Address) {
 			device.Exposed = true
 			if !seenPorts[svc.Port] {
 				device.Ports = append(device.Ports, svc.Port)
 				seenPorts[svc.Port] = true
+			}
+			l := fmt.Sprintf("%d/%s", svc.Port, svc.Proto)
+			if !seenListeners[l] && (svc.Proto == "tcp" || svc.Proto == "udp") {
+				device.Listeners = append(device.Listeners, l)
+				seenListeners[l] = true
 			}
 		}
 	}
