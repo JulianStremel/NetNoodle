@@ -97,7 +97,7 @@ func scanPeer(row interface{ Scan(...any) error }) (store.Peer, error) {
 	var created string
 	var last sql.NullString
 	var disabled int
-	err := row.Scan(&p.ID, &p.Name, &p.Role, &disabled, &created, &last)
+	err := row.Scan(&p.ID, &p.Name, &p.Role, &disabled, &created, &last, &p.Version)
 	if err != nil {
 		return p, notFound(err)
 	}
@@ -110,7 +110,7 @@ func scanPeer(row interface{ Scan(...any) error }) (store.Peer, error) {
 }
 
 func (s *DB) PeerByToken(ctx context.Context, hash []byte) (store.Peer, error) {
-	return scanPeer(s.db.QueryRowContext(ctx, `SELECT id, name, role, disabled, created_at, last_seen
+	return scanPeer(s.db.QueryRowContext(ctx, `SELECT id, name, role, disabled, created_at, last_seen, version
 		FROM peers WHERE token_hash = ?`, hash))
 }
 
@@ -120,7 +120,7 @@ func (s *DB) TouchPeer(ctx context.Context, id int64, now time.Time) error {
 }
 
 func (s *DB) ListPeers(ctx context.Context) ([]store.Peer, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, name, role, disabled, created_at, last_seen FROM peers ORDER BY name`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, name, role, disabled, created_at, last_seen, version FROM peers ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -149,4 +149,9 @@ func (s *DB) SetPeerDisabled(ctx context.Context, id int64, disabled bool) error
 		return store.ErrNotFound
 	}
 	return nil
+}
+
+// SetPeerVersion records the most recently reported software version.
+func (s *DB) SetPeerVersion(ctx context.Context, id int64, version string) error {
+	return affected(s.db.ExecContext(ctx, `UPDATE peers SET version=? WHERE id=?`, version, id))
 }

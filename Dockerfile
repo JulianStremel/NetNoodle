@@ -1,19 +1,27 @@
 # syntax=docker/dockerfile:1
 # Images for the Go parts of netnoodle.
-#   docker build --target server -t netnoodle/server .
+# .git is excluded from local contexts; supply NN_VERSION from the checkout.
+#   docker build --build-arg NN_VERSION="$(git describe --tags --always --dirty 2>/dev/null || printf dev)" --target server -t netnoodle/server .
 #   docker build --target scan   -t netnoodle/scan .
 #   docker build --target agent --output bin/linux .   (static nn-agent + nn-agent-helper for Linux x86_64)
 # The Rust agent and the host actor run on the host itself, not in a container.
 
-FROM golang:1.26-alpine AS build
+# The Go stage runs on the build machine and cross-compiles for the target
+# platform (no emulation for multi-arch images: docker buildx --platform ...).
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
 WORKDIR /src
+ARG NN_VERSION
+ARG TARGETOS=linux
+ARG TARGETARCH
+RUN apk add --no-cache git
 ENV CGO_ENABLED=0
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN go build -trimpath -ldflags "-s -w" -o /out/nn-server ./cmd/nn-server \
- && go build -trimpath -ldflags "-s -w" -o /out/nn-scan ./cmd/nn-scan \
- && go build -trimpath -ldflags "-s -w" -o /out/nn-actor ./cmd/nn-actor \
+RUN version="${NN_VERSION:-$(git describe --tags --always --dirty 2>/dev/null || printf dev)}" \
+ && go build -trimpath -ldflags "-s -w -X github.com/JulianStremel/netnoodle/internal/version.Version=$version" -o /out/nn-server ./cmd/nn-server \
+ && go build -trimpath -ldflags "-s -w -X github.com/JulianStremel/netnoodle/internal/version.Version=$version" -o /out/nn-scan ./cmd/nn-scan \
+ && go build -trimpath -ldflags "-s -w -X github.com/JulianStremel/netnoodle/internal/version.Version=$version" -o /out/nn-actor ./cmd/nn-actor \
  && mkdir -p /out/var/lib/netnoodle/data /out/var/lib/nn-scan /out/var/lib/nn-actor
 
 # nn-server: web UI and API on 7443. Data (database, TLS key) in /var/lib/netnoodle/data.
@@ -52,10 +60,13 @@ COPY agent/ ./
 
 # Linux lint and tests. scripts/check.sh runs this stage when Docker is present.
 FROM agent-base AS agent-check
+ARG NN_VERSION
+ENV NN_VERSION=${NN_VERSION}
 RUN --mount=type=cache,target=/usr/local/cargo/registry     --mount=type=cache,target=/src/target     cargo clippy --locked --all-targets -q -- -D warnings && cargo test --locked -q
 
 FROM agent-base AS agent-build
-RUN --mount=type=cache,target=/usr/local/cargo/registry     --mount=type=cache,target=/src/target     cargo build --release --locked -p nn-agent  && mkdir /out && cp target/release/nn-agent target/release/nn-agent-helper /out/
+ARG NN_VERSION
+RUN --mount=type=cache,target=/usr/local/cargo/registry     --mount=type=cache,target=/src/target     NN_VERSION="${NN_VERSION:-}" cargo build --release --locked -p nn-agent  && mkdir /out && cp target/release/nn-agent target/release/nn-agent-helper /out/
 
 FROM scratch AS agent
 COPY --from=agent-build /out/ /

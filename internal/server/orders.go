@@ -15,11 +15,15 @@ import (
 	"github.com/JulianStremel/netnoodle/internal/orders"
 	"github.com/JulianStremel/netnoodle/internal/proto"
 	"github.com/JulianStremel/netnoodle/internal/store"
+	"github.com/JulianStremel/netnoodle/internal/version"
 )
 
 func (s *Server) handleActorHello(w http.ResponseWriter, r *http.Request) {
-	var h proto.ActorHello
-	if e := readJSON(r, &h); e != nil || h.Version != proto.Version || len(h.Capabilities) > 64 {
+	var h struct {
+		proto.ActorHello
+		ActorVersion string `json:"actor_version"`
+	}
+	if e := readJSON(r, &h); e != nil || h.Version != proto.Version || len(h.ActorVersion) > 128 || len(h.Capabilities) > 64 {
 		writeErr(w, 400, "invalid actor hello")
 		return
 	}
@@ -54,6 +58,12 @@ func (s *Server) handleActorHello(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	p, _ := peerFrom(r.Context())
+	if h.ActorVersion != "" {
+		if e := s.st.SetPeerVersion(r.Context(), p.ID, h.ActorVersion); e != nil {
+			writeErr(w, 500, "internal error")
+			return
+		}
+	}
 	if e := s.st.SetActorCaps(r.Context(), p.ID, h.Capabilities, s.now()); e != nil {
 		writeErr(w, 500, "internal error")
 		return
@@ -93,7 +103,7 @@ func (s *Server) handleActorOrders(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 401, "invalid token")
 			return
 		}
-		envs, e := s.st.SendOrders(r.Context(), p.ID, s.now())
+		envs, e := s.st.SendOrders(r.Context(), p.ID, s.now(), version.Outdated(peer.Version, version.Version))
 		if e != nil {
 			writeErr(w, 500, "internal error")
 			return

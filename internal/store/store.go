@@ -74,6 +74,7 @@ type DeviceClaim struct {
 
 // Peer is a program that talks to the server: a source, an agent or an actor.
 type Peer struct {
+	Version  string    `json:"version"`
 	ID       int64     `json:"id"`
 	Name     string    `json:"name"`
 	Role     string    `json:"role"` // source | agent | actor
@@ -107,6 +108,7 @@ type Peers interface {
 	// Enroll uses one use of the join token and creates the peer.
 	Enroll(ctx context.Context, joinHash []byte, name string, tokenHash []byte, now time.Time, allow func(name string) error) (Peer, error)
 	PeerByToken(ctx context.Context, hash []byte) (Peer, error)
+	SetPeerVersion(ctx context.Context, id int64, version string) error
 	TouchPeer(ctx context.Context, id int64, now time.Time) error
 	ListPeers(ctx context.Context) ([]Peer, error)
 	SetPeerDisabled(ctx context.Context, id int64, disabled bool) error

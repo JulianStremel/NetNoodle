@@ -18,9 +18,14 @@ import (
 	_ "github.com/JulianStremel/netnoodle/internal/actor/pveactor"
 	_ "github.com/JulianStremel/netnoodle/internal/actor/unifiactor"
 	"github.com/JulianStremel/netnoodle/internal/client"
+	"github.com/JulianStremel/netnoodle/internal/version"
 )
 
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "version" || os.Args[1] == "--version" || os.Args[1] == "-version") {
+		fmt.Println(version.Version, version.Protocol)
+		return
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	e := command(ctx, os.Args[1:])

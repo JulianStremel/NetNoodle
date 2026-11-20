@@ -261,14 +261,14 @@ func TestSendOrdersChecksSwitchInsideTransaction(t *testing.T) {
 	if _, e := db.db.Exec(`UPDATE settings SET value='on' WHERE key='decide.killswitch'`); e != nil {
 		t.Fatal(e)
 	}
-	out, e := db.SendOrders(ctx, 1, now)
+	out, e := db.SendOrders(ctx, 1, now, false)
 	if e != nil || len(out) != 0 {
 		t.Fatal(out, e)
 	}
 	if _, e = db.db.Exec(`UPDATE orders SET revert=1,revert_of='original'`); e != nil {
 		t.Fatal(e)
 	}
-	out, e = db.SendOrders(ctx, 1, now)
+	out, e = db.SendOrders(ctx, 1, now, false)
 	if e != nil || len(out) != 1 {
 		t.Fatal(out, e)
 	}

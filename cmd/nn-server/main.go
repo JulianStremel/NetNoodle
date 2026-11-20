@@ -25,6 +25,7 @@ import (
 	"github.com/JulianStremel/netnoodle/internal/server"
 	"github.com/JulianStremel/netnoodle/internal/store"
 	_ "github.com/JulianStremel/netnoodle/internal/store/sqlite" // built-in store backend
+	"github.com/JulianStremel/netnoodle/internal/version"
 	"github.com/JulianStremel/netnoodle/web"
 )
 
@@ -36,6 +37,13 @@ func main() {
 }
 
 func run() error {
+	if len(os.Args) > 1 && (os.Args[1] == "restore" || os.Args[1] == "export") {
+		return lifecycle(context.Background(), os.Args[1], os.Args[2:])
+	}
+	if len(os.Args) > 1 && (os.Args[1] == "version" || os.Args[1] == "--version" || os.Args[1] == "-version") {
+		fmt.Println(version.Version, version.Protocol)
+		return nil
+	}
 	cfgPath := flag.String("config", "netnoodle.json", "config file (optional)")
 	resetAdmin := flag.Bool("reset-admin", false, "set a new random password for user admin and exit")
 	flag.Parse()
@@ -53,6 +61,11 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	lock, err := acquireDataLock(cfg.DataDir)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
 	st, err := store.Open(ctx, cfg.Store, cfg.DataDir)
 	if err != nil {
 		return err

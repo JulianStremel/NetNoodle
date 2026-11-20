@@ -22,6 +22,7 @@ import (
 	"github.com/JulianStremel/netnoodle/internal/client"
 	"github.com/JulianStremel/netnoodle/internal/discovery/scan"
 	"github.com/JulianStremel/netnoodle/internal/proto"
+	"github.com/JulianStremel/netnoodle/internal/version"
 )
 
 const defaultCreds = "nn-scan-creds.json"
@@ -40,6 +41,10 @@ type fileConfig struct {
 }
 
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "version" || os.Args[1] == "--version" || os.Args[1] == "-version") {
+		fmt.Println(version.Version, version.Protocol)
+		return
+	}
 	if len(os.Args) < 2 {
 		usage()
 	}

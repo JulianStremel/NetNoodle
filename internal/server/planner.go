@@ -17,6 +17,7 @@ import (
 	"github.com/JulianStremel/netnoodle/internal/orders"
 	"github.com/JulianStremel/netnoodle/internal/proto"
 	"github.com/JulianStremel/netnoodle/internal/store"
+	"github.com/JulianStremel/netnoodle/internal/version"
 )
 
 type orderState struct {
@@ -231,6 +232,7 @@ func (s *Server) planOrders(ctx context.Context) error {
 		var targets []proto.Identifier
 		best := -1
 		agentOnly := false
+		tooOld := false
 		for i, a := range actors {
 			if a.Peer.Disabled {
 				continue
@@ -260,11 +262,21 @@ func (s *Server) planOrders(ctx context.Context) error {
 					if len(ids) == 0 || score <= best {
 						continue
 					}
+					if version.Outdated(a.Peer.Version, version.Version) {
+						tooOld = true
+						continue
+					}
 					best, chosen, capability, targets = score, &actors[i], c, ids
 				}
 			}
 		}
 		if chosen == nil {
+			if tooOld {
+				if e = s.st.SetProposalOrderState(ctx, p.ID, "no-actor", "actor version too old", now); e != nil {
+					return e
+				}
+				continue
+			}
 			if agentOnly {
 				if e = s.st.SetProposalOrderState(ctx, p.ID, "pending", "target MAC only reported by the device's own agent — confirm with UniFi/scan data or approve again with override", now); e != nil {
 					return e

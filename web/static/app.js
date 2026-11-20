@@ -213,7 +213,12 @@ async function showApp(user) {
   $("#logout").title = `${user} · Log out`;
   clearInterval(navTimer);
   navTimer = setInterval(() => { refreshNav().catch(() => {}); }, 60000);
-  await Promise.all([render(), refreshNav()]);
+  await Promise.all([render(), refreshNav(), api("/api/info").then((info) => {
+    let footer = $("#server-version");
+    if (!footer) { footer = el("div", { id: "server-version", class: "muted small user-name" }); $(".sidebar-bottom").append(footer); }
+    footer.textContent = `netnoodle ${info.version}`;
+    footer.title = `Protocol ${info.protocol}`;
+  }).catch(() => {})]);
 }
 
 $("#login-form").addEventListener("submit", async (ev) => {

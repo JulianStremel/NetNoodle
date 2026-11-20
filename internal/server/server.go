@@ -14,6 +14,7 @@ import (
 	"github.com/JulianStremel/netnoodle/internal/mqtt"
 	"github.com/JulianStremel/netnoodle/internal/notify"
 	"github.com/JulianStremel/netnoodle/internal/store"
+	"github.com/JulianStremel/netnoodle/internal/version"
 )
 
 // Server holds the HTTP handlers and their dependencies.
@@ -268,7 +269,8 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{
 		"order_key":             key,
 		"order_key_fingerprint": fp,
-		"protocol":              "v1",
+		"protocol":              version.Protocol,
+		"version":               version.Version,
 		"tls_fingerprint":       s.fingerprint,
 	})
 }

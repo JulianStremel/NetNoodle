@@ -15,6 +15,7 @@ import (
 
 	"github.com/JulianStremel/netnoodle/internal/pull"
 	"github.com/JulianStremel/netnoodle/internal/store"
+	"github.com/JulianStremel/netnoodle/internal/version"
 )
 
 // Pull mode settings (docs/design/pull-mode.md).
@@ -183,12 +184,13 @@ func newPairCode() string {
 
 type pullView struct {
 	store.PullPeer
+	Outdated bool   `json:"outdated"`
 	Paired   bool   `json:"paired"`
 	Interval string `json:"interval"`
 }
 
 func viewPull(p store.PullPeer) pullView {
-	return pullView{PullPeer: p, Paired: p.Pin != "", Interval: p.Interval.String()}
+	return pullView{PullPeer: p, Paired: p.Pin != "", Interval: p.Interval.String(), Outdated: version.Outdated(p.Version, version.Version)}
 }
 
 type pairInfo struct {

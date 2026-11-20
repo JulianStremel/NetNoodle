@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/JulianStremel/netnoodle/internal/store"
+	"github.com/JulianStremel/netnoodle/internal/version"
 )
 
 const peerKey ctxKey = 2
@@ -51,6 +52,17 @@ func (s *Server) requirePeer(next http.HandlerFunc, roles ...string) http.Handle
 		if !allowed {
 			writeErr(w, http.StatusForbidden, "role "+p.Role+" may not use this endpoint")
 			return
+		}
+		if v := r.Header.Get("X-Netnoodle-Version"); v != "" {
+			if len(v) > 128 {
+				writeErr(w, 400, "version too long")
+				return
+			}
+			if err := s.st.SetPeerVersion(r.Context(), p.ID, v); err != nil {
+				writeErr(w, 503, "try again")
+				return
+			}
+			p.Version = v
 		}
 		_ = s.st.TouchPeer(r.Context(), p.ID, s.now())
 		next(w, r.WithContext(context.WithValue(r.Context(), peerKey, p)))
@@ -123,7 +135,17 @@ func (s *Server) handleListPeers(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	writeJSON(w, http.StatusOK, ps)
+	out := make([]struct {
+		store.Peer
+		Outdated bool `json:"outdated"`
+	}, 0, len(ps))
+	for _, p := range ps {
+		out = append(out, struct {
+			store.Peer
+			Outdated bool `json:"outdated"`
+		}{p, version.Outdated(p.Version, version.Version)})
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func pathID(r *http.Request) (int64, bool) {

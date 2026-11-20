@@ -18,6 +18,7 @@ import (
 
 	"github.com/JulianStremel/netnoodle/internal/proto"
 	"github.com/JulianStremel/netnoodle/internal/tlspin"
+	"github.com/JulianStremel/netnoodle/internal/version"
 )
 
 // Credentials is what a peer stores after enrollment.
@@ -133,6 +134,8 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 	}
 	if c.creds.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.creds.Token)
+		req.Header.Set("X-Netnoodle-Version", version.Version)
+		req.Header.Set("X-Netnoodle-Protocol", version.Protocol)
 	}
 	res, err := c.http.Do(req)
 	if err != nil {

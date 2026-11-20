@@ -26,6 +26,20 @@ cosign verify ghcr.io/julianstremel/netnoodle-server:stable   --certificate-iden
 
 Server in Docker: `docker compose pull && docker compose up -d`. Updates from the web interface, with automatic backup and rollback, are planned (refer to [docs/design/lifecycle.md](../design/lifecycle.md)).
 
+## Backup, restore and export
+
+- Before the server changes the database schema (after an update), it copies the database to `data_dir/backups/` and keeps the last 3 copies. If there is not sufficient free disk space (2 × the database), the server does not start and does not change the schema.
+- A database that is newer than the program (after a downgrade) is refused.
+- Restore a copy (the server must be stopped; it holds `data_dir/nn-server.lock` while it runs):
+
+  ```sh
+  nn-server restore --latest        # or: --file data/backups/<name>.db
+  ```
+
+  The current database is kept in `backups/` as `pre-restore-…`.
+- Export the database and the keys before you move or remove the server: `nn-server export --out netnoodle-export.tar.gz`. The archive does not contain configuration files with secrets (token files).
+- `nn-server version` shows the version. The **Peers** page shows the version of each peer and marks peers that are too old; an actor that is too old gets no new orders (reverts still work).
+
 ## Where netnoodle keeps data
 
 | Part | Place |

@@ -153,6 +153,16 @@ func (s *Server) acceptObservation(ctx context.Context, p store.Peer, raw []byte
 	} else {
 		inventory.StripAgentIDs(obs.Entities)
 	}
+	if p.Role == store.RoleAgent && len(obs.Entities) > 0 {
+		if v := obs.Entities[0].Attributes["agent.version"]; v != "" {
+			if len(v) > 128 {
+				return inventory.Result{}, http.StatusBadRequest, errors.New("version too long")
+			}
+			if err := s.st.SetPeerVersion(ctx, p.ID, v); err != nil {
+				return inventory.Result{}, http.StatusInternalServerError, errIngest
+			}
+		}
+	}
 	res, err := s.ingestAs(ctx, obs, raw, agent)
 	if err != nil {
 		s.log.Error("ingest", "peer", p.Name, "err", err)

@@ -174,7 +174,7 @@ func testResolverMergeMovesTagsProposalsOrders(t *testing.T, open func(*testing.
 	if got.ProposalID != o.ProposalID || got.State != "queued" || !reflect.DeepEqual(got.Envelope, o.Envelope) {
 		t.Fatalf("merge changed signed order history: %+v", got)
 	}
-	_, err = st.SendOrders(ctx, peer.ID, now.Add(time.Minute))
+	_, err = st.SendOrders(ctx, peer.ID, now.Add(time.Minute), false)
 	must(t, err)
 	must(t, st.FinishOrder(ctx, peer.ID, proto.OrderResult{OrderID: o.ID, Status: proto.OrderDone, At: now.Add(time.Minute)}, now.Add(time.Minute)))
 }

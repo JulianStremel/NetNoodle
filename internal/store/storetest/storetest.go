@@ -16,6 +16,8 @@ func Run(t *testing.T, open func(t *testing.T) store.Store) {
 		name string
 		run  func(*testing.T, func(*testing.T) store.Store)
 	}{
+		{"PeerVersion", testPeerVersion},
+		{"RevertsOnlyDelivery", testRevertsOnlyDelivery},
 		{"UsersAndSessions", testUsersAndSessions},
 		{"ProposalsLifecycle", testProposalsLifecycle},
 		{"ConcurrentProposalUpsertAndDecision", testConcurrentProposalUpsertAndDecision},

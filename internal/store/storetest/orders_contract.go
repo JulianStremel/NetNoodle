@@ -72,7 +72,7 @@ func testOrderResultOwnershipAndIdempotence(t *testing.T, open func(*testing.T) 
 	owner, other := actor(t, st, "owner", now), actor(t, st, "other", now)
 	o := newOrder(t, st, now, "order", owner)
 	must(t, st.QueueOrder(ctx, o))
-	sent, err := st.SendOrders(ctx, owner.ID, now)
+	sent, err := st.SendOrders(ctx, owner.ID, now, false)
 	must(t, err)
 	if len(sent) != 1 || !reflect.DeepEqual(sent[0], o.Envelope) {
 		t.Fatal(sent)
@@ -99,7 +99,7 @@ func testOrderConcurrentResults(t *testing.T, open func(*testing.T) store.Store)
 	p := actor(t, st, "actor", now)
 	o := newOrder(t, st, now, "order", p)
 	must(t, st.QueueOrder(ctx, o))
-	_, err := st.SendOrders(ctx, p.ID, now)
+	_, err := st.SendOrders(ctx, p.ID, now, false)
 	must(t, err)
 	raceCalls(t, 12, func(i int) error {
 		return st.FinishOrder(ctx, p.ID, proto.OrderResult{OrderID: o.ID, Status: proto.OrderDone, At: now, Message: fmt.Sprint(i)}, now)
@@ -113,7 +113,7 @@ func testOrderLateResultGrace(t *testing.T, open func(*testing.T) store.Store) {
 			p := actor(t, st, "actor", now)
 			o := newOrder(t, st, now, "order", p)
 			must(t, st.QueueOrder(ctx, o))
-			_, err := st.SendOrders(ctx, p.ID, now)
+			_, err := st.SendOrders(ctx, p.ID, now, false)
 			must(t, err)
 			must(t, st.ExpireOrders(ctx, o.NotAfter))
 			err = st.FinishOrder(ctx, p.ID, proto.OrderResult{OrderID: o.ID, Status: proto.OrderDone, At: now}, o.NotAfter.Add(delta))
@@ -131,7 +131,7 @@ func testOrderRevertSchedulingAndAttempts(t *testing.T, open func(*testing.T) st
 	p := actor(t, st, "actor", now)
 	o := newOrder(t, st, now, "order", p)
 	must(t, st.QueueOrder(ctx, o))
-	_, err := st.SendOrders(ctx, p.ID, now)
+	_, err := st.SendOrders(ctx, p.ID, now, false)
 	must(t, err)
 	must(t, st.FinishOrder(ctx, p.ID, proto.OrderResult{OrderID: o.ID, Status: proto.OrderDone, At: now}, now))
 	due, err := st.DueReverts(ctx, now.Add(59*time.Second))
@@ -164,7 +164,7 @@ func testOrderRevertSchedulingAndAttempts(t *testing.T, open func(*testing.T) st
 		if len(due) != 0 {
 			t.Fatal("in-flight revert duplicated", due)
 		}
-		_, err = st.SendOrders(ctx, p.ID, now)
+		_, err = st.SendOrders(ctx, p.ID, now, false)
 		must(t, err)
 		must(t, st.FinishOrder(ctx, p.ID, proto.OrderResult{OrderID: r.ID, Status: proto.OrderFailed, At: now}, now))
 		now = now.Add(10 * time.Minute)
@@ -184,7 +184,7 @@ func testOrderRevertSuccess(t *testing.T, open func(*testing.T) store.Store) {
 	p := actor(t, st, "actor", now)
 	o := newOrder(t, st, now, "order", p)
 	must(t, st.QueueOrder(ctx, o))
-	_, err := st.SendOrders(ctx, p.ID, now)
+	_, err := st.SendOrders(ctx, p.ID, now, false)
 	must(t, err)
 	must(t, st.FinishOrder(ctx, p.ID, proto.OrderResult{OrderID: o.ID, Status: proto.OrderDone, At: now}, now))
 	r := o
@@ -205,7 +205,7 @@ func testOrderRevertSuccess(t *testing.T, open func(*testing.T) store.Store) {
 	if len(rows) != 1 {
 		t.Fatal(rows)
 	}
-	_, err = st.SendOrders(ctx, p.ID, now)
+	_, err = st.SendOrders(ctx, p.ID, now, false)
 	must(t, err)
 	must(t, st.FinishOrder(ctx, p.ID, proto.OrderResult{OrderID: rows[0].ID, Status: proto.OrderDone, At: now}, now))
 	got, err := st.GetOrder(ctx, o.ID)
@@ -228,7 +228,7 @@ func testOrderUncertainHandling(t *testing.T, open func(*testing.T) store.Store)
 			o := newOrder(t, st, now, "order", p)
 			must(t, st.QueueOrder(ctx, o))
 			if mode != "queued-expiry" {
-				_, err := st.SendOrders(ctx, p.ID, now)
+				_, err := st.SendOrders(ctx, p.ID, now, false)
 				must(t, err)
 			}
 			at := now
@@ -258,7 +258,7 @@ func testKillSwitchCancelsQueuedOrders(t *testing.T, open func(*testing.T) store
 	p := actor(t, st, "actor", now)
 	sent := newOrder(t, st, now, "sent", p)
 	must(t, st.QueueOrder(ctx, sent))
-	_, err := st.SendOrders(ctx, p.ID, now)
+	_, err := st.SendOrders(ctx, p.ID, now, false)
 	must(t, err)
 	must(t, st.FinishOrder(ctx, p.ID, proto.OrderResult{OrderID: sent.ID, Status: proto.OrderDone, At: now}, now))
 	revert := sent
@@ -282,13 +282,13 @@ func testKillSwitchCancelsQueuedOrders(t *testing.T, open func(*testing.T) store
 	if err := st.QueueOrder(ctx, unqueued); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("queue with switch on: %v", err)
 	}
-	envs, err := st.SendOrders(ctx, p.ID, now)
+	envs, err := st.SendOrders(ctx, p.ID, now, false)
 	must(t, err)
 	if len(envs) != 1 || !reflect.DeepEqual(envs[0], revert.Envelope) {
 		t.Fatalf("switch must preserve revert delivery: %+v", envs)
 	}
 	must(t, st.SetSetting(ctx, "decide.killswitch", "off"))
-	envs, err = st.SendOrders(ctx, p.ID, now)
+	envs, err = st.SendOrders(ctx, p.ID, now, false)
 	must(t, err)
 	if len(envs) != 0 {
 		t.Fatal("cancelled order revived", envs)
@@ -307,7 +307,7 @@ func testOrderRetentionPreservesRecovery(t *testing.T, open func(*testing.T) sto
 			}
 			must(t, st.QueueOrder(ctx, o))
 			if state != "queued" {
-				_, err := st.SendOrders(ctx, peer.ID, at)
+				_, err := st.SendOrders(ctx, peer.ID, at, false)
 				must(t, err)
 			}
 			switch state {

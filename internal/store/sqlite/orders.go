@@ -230,13 +230,13 @@ func (s *DB) QueueOrder(ctx context.Context, o store.Order) error {
 	}
 	return tx.Commit()
 }
-func (s *DB) SendOrders(ctx context.Context, peer int64, now time.Time) ([]orders.Envelope, error) {
+func (s *DB) SendOrders(ctx context.Context, peer int64, now time.Time, revertsOnly bool) ([]orders.Envelope, error) {
 	tx, e := s.db.BeginTx(ctx, nil)
 	if e != nil {
 		return nil, e
 	}
 	defer tx.Rollback()
-	rows, e := tx.QueryContext(ctx, `SELECT payload,sig FROM orders WHERE actor_peer_id=? AND state='queued' AND not_after>? AND (revert=1 OR (SELECT value FROM settings WHERE key='decide.killswitch')='off') ORDER BY created_at,id LIMIT 64`, peer, ts(now))
+	rows, e := tx.QueryContext(ctx, `SELECT payload,sig FROM orders WHERE (revert=1 OR ?=0) AND actor_peer_id=? AND state='queued' AND not_after>? AND (revert=1 OR (SELECT value FROM settings WHERE key='decide.killswitch')='off') ORDER BY created_at,id LIMIT 64`, revertsOnly, peer, ts(now))
 	if e != nil {
 		return nil, e
 	}

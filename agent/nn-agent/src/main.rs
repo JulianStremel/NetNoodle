@@ -12,7 +12,7 @@ use std::process::ExitCode;
 #[derive(Parser)]
 #[command(
     name = "nn-agent",
-    version,
+    version = nn_agent::VERSION,
     about = "netnoodle agent: reports packages, services and interfaces of this host"
 )]
 struct Cli {

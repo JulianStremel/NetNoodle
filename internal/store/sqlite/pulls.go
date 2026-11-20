@@ -9,7 +9,7 @@ import (
 	"github.com/JulianStremel/netnoodle/internal/store"
 )
 
-const pullCols = `p.id, p.name, p.role, p.disabled, p.created_at, p.last_seen,
+const pullCols = `p.id, p.name, p.role, p.disabled, p.created_at, p.last_seen, p.version,
 	q.transport, q.address, q.pin, q.pair_code, q.pair_expires, q.interval_s, q.next_pull, q.last_pull, q.last_error`
 
 func scanPull(row interface{ Scan(...any) error }) (store.PullPeer, error) {
@@ -18,7 +18,7 @@ func scanPull(row interface{ Scan(...any) error }) (store.PullPeer, error) {
 	var last, pexp, lpull sql.NullString
 	var disabled int
 	var interval int64
-	err := row.Scan(&p.ID, &p.Name, &p.Role, &disabled, &created, &last,
+	err := row.Scan(&p.ID, &p.Name, &p.Role, &disabled, &created, &last, &p.Version,
 		&p.Transport, &p.Address, &p.Pin, &p.PairCode, &pexp, &interval, &next, &lpull, &p.LastError)
 	if err != nil {
 		return p, notFound(err)

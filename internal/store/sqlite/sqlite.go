@@ -6,10 +6,8 @@ import (
 	"database/sql"
 	"embed"
 	"errors"
-	"fmt"
-	"io/fs"
 	"net/url"
-	"sort"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -23,7 +21,9 @@ var migrations embed.FS
 
 // DB is the SQLite store.
 type DB struct {
-	db *sql.DB
+	db        *sql.DB
+	path      string
+	backupDir string
 }
 
 var _ store.Store = (*DB)(nil)
@@ -31,6 +31,10 @@ var _ store.Store = (*DB)(nil)
 // Open opens (and creates) the database file at path and applies all
 // pending migrations. Use ":memory:" for tests.
 func Open(ctx context.Context, path string) (*DB, error) {
+	return openWithOptions(ctx, path, migrationOptions{fs: migrations, free: freeSpace})
+}
+
+func openWithOptions(ctx context.Context, path string, opts migrationOptions) (*DB, error) {
 	q := url.Values{}
 	q.Add("_pragma", "foreign_keys(1)")
 	q.Add("_pragma", "busy_timeout(5000)")
@@ -38,7 +42,7 @@ func Open(ctx context.Context, path string) (*DB, error) {
 		q.Add("_pragma", "journal_mode(WAL)")
 		q.Add("_pragma", "synchronous(NORMAL)")
 	}
-	dsn := "file:" + path + "?" + q.Encode()
+	dsn := "file:" + (&url.URL{Path: filepath.ToSlash(path)}).EscapedPath() + "?" + q.Encode()
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
@@ -47,8 +51,11 @@ func Open(ctx context.Context, path string) (*DB, error) {
 	// lock upgrades and keeps ":memory:" databases shared. Revisit if reads
 	// become a bottleneck.
 	db.SetMaxOpenConns(1)
-	s := &DB{db: db}
-	if err := s.migrate(ctx); err != nil {
+	s := &DB{db: db, path: path, backupDir: opts.backupDir}
+	if s.backupDir == "" {
+		s.backupDir = filepath.Join(filepath.Dir(path), "backups")
+	}
+	if err := s.migrateWithOptions(ctx, opts); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -59,49 +66,6 @@ func Open(ctx context.Context, path string) (*DB, error) {
 func (s *DB) SQL() *sql.DB { return s.db }
 
 func (s *DB) Close() error { return s.db.Close() }
-
-func (s *DB) migrate(ctx context.Context) error {
-	if _, err := s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
-		name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)`); err != nil {
-		return err
-	}
-	names, err := fs.Glob(migrations, "migrations/*.sql")
-	if err != nil {
-		return err
-	}
-	sort.Strings(names)
-	for _, n := range names {
-		var x int
-		err := s.db.QueryRowContext(ctx, `SELECT 1 FROM schema_migrations WHERE name = ?`, n).Scan(&x)
-		if err == nil {
-			continue
-		}
-		if !errors.Is(err, sql.ErrNoRows) {
-			return err
-		}
-		body, err := migrations.ReadFile(n)
-		if err != nil {
-			return err
-		}
-		tx, err := s.db.BeginTx(ctx, nil)
-		if err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, string(body)); err != nil {
-			tx.Rollback()
-			return fmt.Errorf("migration %s: %w", n, err)
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations(name, applied_at) VALUES (?, ?)`,
-			n, time.Now().UTC().Format(time.RFC3339)); err != nil {
-			tx.Rollback()
-			return err
-		}
-		if err := tx.Commit(); err != nil {
-			return err
-		}
-	}
-	return nil
-}
 
 // tsLayout has a fixed width, so text comparison in SQL equals time order.
 const tsLayout = "2006-01-02T15:04:05.000000000Z"

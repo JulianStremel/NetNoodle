@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"github.com/JulianStremel/netnoodle/internal/store"
 	"io"
 	"log/slog"
 	"net/http"
@@ -172,11 +173,24 @@ func TestEnrollAndIngest(t *testing.T) {
 	}
 	// The agent claims another agent id; the server replaces it with its own.
 	rep := `{"version":"v1","source":"spoof","observed_at":"2026-11-19T10:01:00Z","complete":true,"entities":[
-		{"kind":"host","name":"web1","identifiers":[{"kind":"agent","value":"other","strength":"strong"}],
+		{"kind":"host","name":"web1","attributes":{"agent.version":"v0.2.7"},"identifiers":[{"kind":"agent","value":"other","strength":"strong"}],
 		 "interfaces":[{"name":"eth0","mac":"00:1a:2b:00:00:05","ips":["10.0.0.5"]}],
 		 "components":[{"purl":"pkg:deb/debian/openssh-server@9.2p1-2","name":"openssh-server","version":"9.2p1-2"}]}]}`
 	if code := doJSON(t, anon, "POST", ts.URL+"/v1/observations", agent.Token, rep, nil); code != 200 {
 		t.Fatalf("agent report = %d", code)
+	}
+	var peerVersions []store.Peer
+	if code := doJSON(t, c, "GET", ts.URL+"/api/peers", "", "", &peerVersions); code != 200 {
+		t.Fatal(code)
+	}
+	foundVersion := false
+	for _, p := range peerVersions {
+		if p.Name == "web1" && p.Version == "v0.2.7" {
+			foundVersion = true
+		}
+	}
+	if !foundVersion {
+		t.Fatal("push agent version missing", peerVersions)
 	}
 	if code := doJSON(t, anon, "POST", ts.URL+"/v1/observations", "bad", rep, nil); code != http.StatusUnauthorized {
 		t.Fatalf("bad token = %d", code)

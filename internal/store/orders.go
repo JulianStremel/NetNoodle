@@ -43,7 +43,9 @@ type Orders interface {
 	PlanningProposals(context.Context) ([]Proposal, error)
 	DueReverts(context.Context, time.Time) ([]Order, error)
 	ExpiringOrders(context.Context, time.Time) ([]Order, error)
-	SendOrders(context.Context, int64, time.Time) ([]orders.Envelope, error)
+	// SendOrders atomically delivers queued work; revertsOnly withholds forward
+	// orders without marking them sent. Recovery is always eligible.
+	SendOrders(context.Context, int64, time.Time, bool) ([]orders.Envelope, error)
 	FinishOrder(context.Context, int64, proto.OrderResult, time.Time) error
 	ExpireOrders(context.Context, time.Time) error
 	SetProposalOrderState(context.Context, int64, string, string, time.Time) error

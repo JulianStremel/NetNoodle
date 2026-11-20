@@ -65,6 +65,7 @@ function pullCard(data, out) {
       d.peers.length === 0 ? el("p", { class: "muted" }, "None.") :
         table([
           { title: "Name", key: "name" },
+          { title: "Version", render: (p) => el("span", {}, p.version || "unknown", p.outdated ? el("span", { class: "pill bad" }, "outdated") : null) },
           { title: "Address", render: (p) => el("span", { class: "mono" }, p.address) },
           { title: "State", render: state },
           { title: "Interval", key: "interval" },
@@ -159,6 +160,7 @@ async function page(root) {
       table([
         { title: "Name", key: "name" },
         { title: "Role", render: (p) => el("span", { class: "pill" }, p.role) },
+        { title: "Version", render: (p) => el("span", {}, p.version || "unknown", p.outdated ? el("span", { class: "pill bad" }, "outdated") : null) },
         { title: "Last seen", render: (p) => fmtTime(p.last_seen) },
         { title: "Status", render: (p) => el("span", { class: p.disabled ? "pill bad" : "pill ok" }, p.disabled ? "disabled" : "active") },
         {

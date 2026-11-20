@@ -259,3 +259,39 @@ func testSettingsAndEventRetention(t *testing.T, open func(*testing.T) store.Sto
 		t.Fatal(events)
 	}
 }
+
+func testPeerVersion(t *testing.T, open func(*testing.T) store.Store) {
+	st, ctx, now := open(t), context.Background(), time.Now().UTC()
+	_, err := st.CreateJoinToken(ctx, []byte("version-join"), store.RoleActor, "", 1, now.Add(time.Hour))
+	must(t, err)
+	p, err := st.Enroll(ctx, []byte("version-join"), "version-peer", []byte("version-peer"), now, nil)
+	must(t, err)
+	if p.Version != "" {
+		t.Fatal(p)
+	}
+	for _, v := range []string{"v0.2.0", "v0.3.1", "dev"} {
+		must(t, st.SetPeerVersion(ctx, p.ID, v))
+		got, err := st.PeerByToken(ctx, []byte("version-peer"))
+		must(t, err)
+		ps, err := st.ListPeers(ctx)
+		must(t, err)
+		actors, err := st.ListActors(ctx)
+		must(t, err)
+		if got.Version != v || len(ps) != 1 || ps[0].Version != v || len(actors) != 1 || actors[0].Peer.Version != v {
+			t.Fatalf("version missing: %+v %+v %+v", got, ps, actors)
+		}
+	}
+	if err := st.SetPeerVersion(ctx, p.ID+1000, "x"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatal(err)
+	}
+	pull, err := st.CreatePullPeer(ctx, store.PullPeer{Peer: store.Peer{Name: "version-pull"}, Transport: "https", Address: "localhost:7444", Interval: time.Hour, NextPull: now}, []byte("version-pull"), now)
+	must(t, err)
+	must(t, st.SetPeerVersion(ctx, pull.ID, "v1.2.3"))
+	pulls, err := st.ListPullPeers(ctx)
+	must(t, err)
+	pull, err = st.GetPullPeer(ctx, pull.ID)
+	must(t, err)
+	if len(pulls) != 1 || pulls[0].Version != "v1.2.3" || pull.Version != "v1.2.3" {
+		t.Fatal(pulls, pull)
+	}
+}

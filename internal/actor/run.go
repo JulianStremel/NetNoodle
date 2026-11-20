@@ -18,6 +18,7 @@ import (
 	"github.com/JulianStremel/netnoodle/internal/orders"
 	"github.com/JulianStremel/netnoodle/internal/proto"
 	"github.com/JulianStremel/netnoodle/internal/registry"
+	"github.com/JulianStremel/netnoodle/internal/version"
 )
 
 type AllowRule struct {
@@ -262,7 +263,10 @@ func (r *Runner) Run(ctx context.Context, c Protocol) error {
 	if e := r.outbox.flush(ctx, c); e != nil {
 		return e
 	}
-	hello := proto.ActorHello{Version: proto.Version, Actor: r.Name, Capabilities: caps}
+	hello := struct {
+		proto.ActorHello
+		ActorVersion string `json:"actor_version"`
+	}{proto.ActorHello{Version: proto.Version, Actor: r.Name, Capabilities: caps}, version.Version}
 	for {
 		if e := c.Do(ctx, "POST", "/v1/actor/hello", hello, nil); e != nil {
 			if e = retryActor(ctx, e); e != nil {

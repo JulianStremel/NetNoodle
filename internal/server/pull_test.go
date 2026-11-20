@@ -83,7 +83,7 @@ func TestPullPairAndReport(t *testing.T) {
 	s.SetPull(map[string]pull.Transport{"https": pullhttps.New(cert, fp)}, fp)
 
 	agent := newFakeAgent(t, fp, `{"version":"v1","source":"liar","observed_at":"2026-11-20T10:00:00Z",
-		"entities":[{"kind":"host","name":"rproxy","identifiers":[{"kind":"agent","value":"db01","strength":"strong"}],
+		"entities":[{"kind":"host","name":"rproxy","attributes":{"agent.version":"v0.2.7"},"identifiers":[{"kind":"agent","value":"db01","strength":"strong"}],
 		"components":[{"purl":"pkg:deb/debian/nginx@1.22.1-9","name":"nginx","version":"1.22.1-9"}]}]}`)
 
 	var info struct {
@@ -119,7 +119,7 @@ func TestPullPairAndReport(t *testing.T) {
 	agent.code.Store(info.Code)
 	pullNow()
 	p, _ = s.st.GetPullPeer(ctx, info.Peer.ID)
-	if p.Pin != agent.fp || p.PairCode != "" || p.LastError != "" || p.LastPull.IsZero() {
+	if p.Version != "v0.2.7" || p.Pin != agent.fp || p.PairCode != "" || p.LastError != "" || p.LastPull.IsZero() {
 		t.Fatalf("after pairing: %+v", p)
 	}
 	if p.NextPull.Before(time.Now().Add(50 * time.Minute)) {

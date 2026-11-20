@@ -77,7 +77,7 @@ pub fn collect(ctx: &Ctx, collectors: &[Box<dyn Collector>]) -> Report {
         e.kind = EntityKind::Host;
     }
     e.attributes
-        .insert("agent.version".into(), env!("CARGO_PKG_VERSION").into());
+        .insert("agent.version".into(), crate::VERSION.into());
     if !errors.is_empty() {
         e.attributes
             .insert("agent.errors".into(), errors.join("; "));
@@ -106,6 +106,10 @@ mod tests {
         let ctx = crate::collectors::testctx("debian");
         let all = crate::collectors::linux();
         let r = collect(&ctx, &all);
+        assert_eq!(
+            r.entity.attributes.get("agent.version").unwrap(),
+            crate::VERSION
+        );
         // rpm finds no database and returns nothing; no collector fails.
         assert!(r.errors.is_empty(), "{:?}", r.errors);
         let e = &r.entity;
