@@ -225,7 +225,7 @@ func TestTagsSettingsAndMerge(t *testing.T) {
 			approved++
 		}
 	}
-	if open != 3 || approved != 1 {
+	if open != 3 || approved != 0 {
 		t.Fatalf("open=%d approved=%d %+v", open, approved, ps)
 	}
 	if e = db.SetTags(ctx, keep, nil); e != nil {

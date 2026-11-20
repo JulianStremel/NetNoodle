@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/JulianStremel/netnoodle/internal/decide"
 	"github.com/JulianStremel/netnoodle/internal/notify"
 	"github.com/JulianStremel/netnoodle/internal/orders"
 	"github.com/JulianStremel/netnoodle/internal/proto"
@@ -17,15 +18,17 @@ import (
 )
 
 type orderState struct {
-	run   sync.Mutex
-	mu    sync.Mutex
-	key   ed25519.PrivateKey
-	kick  chan struct{}
-	wakes map[int64]chan struct{}
+	run       sync.Mutex
+	mu        sync.Mutex
+	key       ed25519.PrivateKey
+	kick      chan struct{}
+	wakes     map[int64]chan struct{}
+	polls     map[int64]int
+	pollTotal int
 }
 
 func newOrderState() *orderState {
-	return &orderState{kick: make(chan struct{}, 1), wakes: map[int64]chan struct{}{}}
+	return &orderState{kick: make(chan struct{}, 1), wakes: map[int64]chan struct{}{}, polls: map[int64]int{}}
 }
 
 // SetOrderKey installs the persistent key before serving requests.
@@ -104,6 +107,9 @@ func (s *Server) planOrders(ctx context.Context) error {
 	s.orders.run.Lock()
 	defer s.orders.run.Unlock()
 	now := s.now()
+	if e := s.st.ExpireProposals(ctx, now.Add(-7*24*time.Hour)); e != nil {
+		return e
+	}
 	expiring, e := s.st.ExpiringOrders(ctx, now)
 	if e != nil {
 		return e
@@ -131,7 +137,17 @@ func (s *Server) planOrders(ctx context.Context) error {
 		enabled[a.Peer.ID] = !a.Peer.Disabled
 	}
 	for _, o := range os {
-		if o.Revert || o.Reverted || o.RevertAction == "" || o.RevertAttempts >= 6 || !enabled[o.ActorPeerID] {
+		if o.Revert || o.Reverted || o.RevertAction == "" || o.RevertAttempts >= 6 {
+			continue
+		}
+		if !enabled[o.ActorPeerID] {
+			first, err := s.st.MarkRevertBlocked(ctx, o.ID)
+			if err != nil {
+				return err
+			}
+			if first {
+				s.emit(ctx, notify.Event{Type: "order.revert-blocked", Severity: "critical", Title: "revert blocked: actor " + o.Actor + " disabled", Link: "#/actions"}, o.Actor, `{"severity":"critical"}`)
+			}
 			continue
 		}
 		r := store.Order{Order: proto.Order{Actor: o.Actor, Action: o.RevertAction, Targets: o.Targets, Params: o.Params, Revert: true, RevertOf: o.ID}, ProposalID: o.ProposalID, ActorPeerID: o.ActorPeerID}
@@ -155,10 +171,82 @@ func (s *Server) planOrders(ctx context.Context) error {
 		return e
 	}
 	sort.Slice(actors, func(i, j int) bool { return actors[i].Peer.ID < actors[j].Peer.ID })
+	var nodes map[int64]GraphNode
 	for _, p := range ps {
+		if p.Tier == "auto" {
+			s.invalidateDecisionContext()
+			nodes, e = s.decisionContext(ctx)
+			if e != nil {
+				return e
+			}
+			break
+		}
+	}
+	s.decide.mu.Lock()
+	gs := s.decide.guards
+	s.decide.mu.Unlock()
+	for _, p := range ps {
+		deadline := p.ExpiresAt
+		if deadline.IsZero() {
+			deadline = p.CreatedAt.Add(7 * 24 * time.Hour)
+		}
+		if (p.State == "approved" || p.State == "no-actor") && !deadline.After(now) {
+			if e = s.st.SetProposalOrderState(ctx, p.ID, "expired", "proposal expired", now); e != nil {
+				return e
+			}
+			continue
+		}
 		d, e := s.st.GetDevice(ctx, p.DeviceID)
 		if e != nil {
 			return e
+		}
+		intersection := []proto.Identifier{}
+		for _, snap := range p.TargetSnapshot {
+			if !store.StrongTarget(snap) {
+				continue
+			}
+			for _, id := range d.IDs {
+				if store.StrongTarget(id.Identifier) && id.Kind == snap.Kind && id.Value == snap.Value {
+					intersection = append(intersection, snap)
+					break
+				}
+			}
+		}
+		if len(intersection) == 0 {
+			if e = s.st.SetProposalOrderState(ctx, p.ID, "pending", "device identity changed; approve again", now); e != nil {
+				return e
+			}
+			continue
+		}
+		if p.Tier == "auto" {
+			fs, err := s.st.ListFindings(ctx, store.FindingFilter{DeviceID: p.DeviceID, State: "open", Limit: maxEvaluationsPerDevice})
+			if err != nil {
+				return err
+			}
+			var finding *store.FindingRow
+			for i := range fs {
+				if fs[i].VulnID == p.VulnID && fs[i].PURL == p.PURL {
+					finding = &fs[i]
+					break
+				}
+			}
+			reason := "finding no longer open; approve again"
+			safe := false
+			if finding != nil {
+				q, _, err := decide.Evaluate(ctx, []decide.Decider{pinnedDecider{p}}, gs, findingSituation(d, *finding, nodes[p.DeviceID]))
+				safe = err == nil && q.Tier == decide.TierAuto && q.Action == p.Action
+				reason = q.Reason
+				p.TTL = q.TTL
+			}
+			if !safe {
+				if reason == "" {
+					reason = "guards require approval"
+				}
+				if e = s.st.SetProposalOrderState(ctx, p.ID, "pending", reason, now); e != nil {
+					return e
+				}
+				continue
+			}
 		}
 		var chosen *store.ActorCaps
 		var capability proto.Capability
@@ -172,33 +260,26 @@ func (s *Server) planOrders(ctx context.Context) error {
 				if c.Action != p.Action || (p.Tier == "auto" && (!c.Reversible || c.RevertAction == "" || p.TTL <= 0)) {
 					continue
 				}
-				// Address the device by ONE identifier kind: the first kind
-				// in the capability's order that the device has as a strong
-				// identifier, else the first kind it has at all. Sending
-				// every kind would make the actor check (and act on) more
-				// than needed, for example an IP next to the MAC.
-				kind, score := "", 0
+				// Use the first supported strong kind from the pinned/live intersection.
+				kind, score := "", 1
 				for _, want := range c.TargetIDKinds {
-					for _, id := range d.IDs {
-						if id.Kind != want {
-							continue
-						}
-						if id.Strength == proto.Strong && score == 0 {
-							kind, score = want, 1
-						} else if kind == "" {
+					for _, id := range intersection {
+						if id.Kind == want {
 							kind = want
+							break
 						}
 					}
-					if score == 1 {
+					if kind != "" {
 						break
 					}
 				}
 				ids := []proto.Identifier{}
-				for _, id := range d.IDs {
-					if kind != "" && id.Kind == kind {
-						ids = append(ids, id.Identifier)
+				for _, id := range intersection {
+					if id.Kind == kind {
+						ids = append(ids, id)
 					}
 				}
+
 				if len(ids) == 0 || score <= best {
 					continue
 				}
@@ -232,9 +313,38 @@ func (s *Server) planOrders(ctx context.Context) error {
 			revert = capability.RevertAction
 		}
 		o := store.Order{Order: proto.Order{Actor: chosen.Peer.Name, Action: p.Action, Targets: targets, Params: p.Params, TTL: p.TTL}, ProposalID: p.ID, ActorPeerID: chosen.Peer.ID, RevertAction: revert}
-		if e = s.queueSigned(ctx, o); e != nil {
+		if e = s.queueSigned(ctx, o); e != nil && !errors.Is(e, store.ErrConflict) {
 			return e
 		}
 	}
 	return nil
+}
+
+// Replay the saved proposal through today's guards without asking deciders to widen it.
+type pinnedDecider struct{ p store.Proposal }
+
+func (p pinnedDecider) Name() string { return "saved proposal" }
+func (p pinnedDecider) Decide(context.Context, decide.Situation) (decide.Proposal, bool, error) {
+	return decide.Proposal{Tier: decide.TierAuto, Action: p.p.Action, Params: p.p.Params, TTL: p.p.TTL, Reason: p.p.Reason}, true, nil
+}
+
+func (s *Server) acquireOrderPoll(id int64) bool {
+	s.orders.mu.Lock()
+	defer s.orders.mu.Unlock()
+	if s.orders.pollTotal >= 256 || s.orders.polls[id] >= 2 {
+		return false
+	}
+	s.orders.polls[id]++
+	s.orders.pollTotal++
+	return true
+}
+func (s *Server) releaseOrderPoll(id int64) {
+	s.orders.mu.Lock()
+	defer s.orders.mu.Unlock()
+	s.orders.pollTotal--
+	s.orders.polls[id]--
+	if s.orders.polls[id] == 0 {
+		delete(s.orders.polls, id)
+		delete(s.orders.wakes, id)
+	}
 }

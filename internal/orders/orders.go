@@ -154,14 +154,22 @@ func (n *NonceStore) Use(nonce string, notAfter, now time.Time) error {
 		return errors.New("nonce replay")
 	}
 	next[nonce] = notAfter
-	if e := os.MkdirAll(filepath.Dir(n.path), 0700); e != nil {
-		return e
-	}
 	b, e := json.Marshal(next)
 	if e != nil {
 		return e
 	}
-	f, e := os.CreateTemp(filepath.Dir(n.path), ".nonces-*")
+	if e = WriteFileDurable(n.path, b); e == nil {
+		n.seen = next
+	}
+	return e
+}
+
+// WriteFileDurable atomically replaces private actor state, syncing file and directory.
+func WriteFileDurable(name string, b []byte) error {
+	if e := os.MkdirAll(filepath.Dir(name), 0700); e != nil {
+		return e
+	}
+	f, e := os.CreateTemp(filepath.Dir(name), ".actor-state-*")
 	if e != nil {
 		return e
 	}
@@ -177,10 +185,10 @@ func (n *NonceStore) Use(nonce string, notAfter, now time.Time) error {
 		e = ce
 	}
 	if e == nil {
-		e = os.Rename(f.Name(), n.path)
+		e = os.Rename(f.Name(), name)
 	}
 	if e == nil {
-		n.seen = next
+		e = syncParent(name)
 	}
 	return e
 }

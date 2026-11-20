@@ -41,6 +41,7 @@ type Runner struct {
 	MaxPerHour int
 	Now        func() time.Time
 	executed   []time.Time
+	outbox     *resultOutbox
 }
 
 // maxOrderLife is the longest order validity the actor accepts.
@@ -82,13 +83,23 @@ func NewRunner(cfg Config, creds client.Credentials) (*Runner, error) {
 	if e != nil {
 		return nil, e
 	}
-	return &Runner{Name: creds.Name, Key: key, Nonces: ns, Backends: bs, Allow: cfg.Allow, DryRun: cfg.DryRun == nil || *cfg.DryRun, MaxPerHour: cfg.MaxPerHour, Now: time.Now}, nil
+	if e = validateRevertAllow(cfg.Allow, bs); e != nil {
+		return nil, e
+	}
+	outbox, e := openOutbox(cfg.NonceFile + ".outbox")
+	if e != nil {
+		return nil, e
+	}
+	return &Runner{outbox: outbox, Name: creds.Name, Key: key, Nonces: ns, Backends: bs, Allow: cfg.Allow, DryRun: cfg.DryRun == nil || *cfg.DryRun, MaxPerHour: cfg.MaxPerHour, Now: time.Now}, nil
 }
 func (r *Runner) allowed(o proto.Order) bool {
 	if len(o.Targets) == 0 {
 		return false
 	}
 	for _, t := range o.Targets {
+		if t.Value == "" {
+			return false
+		}
 		ok := false
 		for _, rule := range r.Allow {
 			if rule.Action != o.Action {
@@ -113,7 +124,7 @@ func (r *Runner) allowed(o proto.Order) bool {
 }
 
 // Handle is called serially by Run. Only a verified, fresh, locally permitted
-// order can reach a backend. Even dry runs consume nonces and rate slots.
+// order can reach a backend. Reverts bypass the hourly rate limit.
 func (r *Runner) Handle(ctx context.Context, env orders.Envelope) proto.OrderResult {
 	now := r.Now()
 	res := proto.OrderResult{Version: proto.Version, Status: proto.OrderRejected, At: now}
@@ -180,10 +191,12 @@ func (r *Runner) Handle(ctx context.Context, env orders.Envelope) proto.OrderRes
 		}
 	}
 	r.executed = keep
-	if len(r.executed) >= r.MaxPerHour {
+	if !o.Revert && len(r.executed) >= r.MaxPerHour {
 		return reject("hourly rate limit exceeded")
 	}
-	r.executed = append(r.executed, now)
+	if !o.Revert {
+		r.executed = append(r.executed, now)
+	}
 	res.Status = proto.OrderDone
 	if r.DryRun {
 		res.Message = fmt.Sprintf("dry run: would %s %v", o.Action, o.Targets)
@@ -217,6 +230,9 @@ func (r *Runner) Run(ctx context.Context, c Protocol) error {
 	if len(caps) > 64 {
 		return errors.New("backends advertise more than 64 capabilities")
 	}
+	if e := r.outbox.flush(ctx, c); e != nil {
+		return e
+	}
 	hello := proto.ActorHello{Version: proto.Version, Actor: r.Name, Capabilities: caps}
 	for {
 		if e := c.Do(ctx, "POST", "/v1/actor/hello", hello, nil); e != nil {
@@ -226,6 +242,9 @@ func (r *Runner) Run(ctx context.Context, c Protocol) error {
 			continue
 		}
 		for {
+			if e := r.outbox.flush(ctx, c); e != nil {
+				return e
+			}
 			var envs []orders.Envelope
 			if e := c.Do(ctx, "GET", "/v1/orders?wait=25", nil, &envs); e != nil {
 				if e = retryActor(ctx, e); e != nil {
@@ -234,25 +253,19 @@ func (r *Runner) Run(ctx context.Context, c Protocol) error {
 				break
 			}
 			for _, env := range envs {
+				// Never replace a persisted result with a replay rejection.
+				if o, e := orders.Verify(r.Key, env); e == nil && r.outbox.contains(o.ID) {
+					continue
+				}
 				res := r.Handle(ctx, env)
 				if len(res.Message) > 4096 {
 					res.Message = res.Message[:4096]
 				}
-				for {
-					e := c.Do(ctx, "POST", "/v1/orders/result", res, nil)
-					if e == nil {
-						break
-					}
-					if ctx.Err() != nil {
-						return ctx.Err()
-					}
-					slog.Error("send order result", "order", res.OrderID, "err", e) // A permanent response (expired, duplicate, or malformed) must not stall polling.
-					if strings.Contains(e.Error(), ": 4") {
-						break
-					}
-					if e = retryActor(ctx, e); e != nil {
-						return e
-					}
+				if e := r.outbox.add(res); e != nil {
+					return e
+				}
+				if e := r.outbox.flush(ctx, c); e != nil {
+					return e
 				}
 			}
 		}
@@ -268,4 +281,59 @@ func retryActor(ctx context.Context, err error) error {
 	case <-t.C:
 		return nil
 	}
+}
+
+// Every forward pattern must also be covered by a permission for its inverse.
+func validateRevertAllow(rules []AllowRule, bs []Backend) error {
+	for _, b := range bs {
+		for _, c := range b.Capabilities() {
+			if c.RevertAction == "" {
+				continue
+			}
+			for _, rule := range rules {
+				if rule.Action != c.Action {
+					continue
+				}
+				for _, target := range rule.Targets {
+					covered := false
+					for _, inverse := range rules {
+						if inverse.Action == c.RevertAction {
+							for _, pattern := range inverse.Targets {
+								if coversTarget(pattern, target) {
+									covered = true
+								}
+							}
+						}
+					}
+					if !covered {
+						return fmt.Errorf("allow %s target %q requires the same target for revert action %s", c.Action, target, c.RevertAction)
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// Exact patterns, literal targets and broader simple prefix globs can be proven
+// to cover a rule without sampling target values. Complex globs require the
+// identical pattern, so validation fails closed for ambiguous containment.
+func coversTarget(inverse, forward string) bool {
+	if inverse == forward {
+		return true
+	}
+	ik, iv, iok := strings.Cut(inverse, "=")
+	fk, fv, fok := strings.Cut(forward, "=")
+	if !iok || !fok || ik != fk {
+		return false
+	}
+	if !strings.ContainsAny(fv, "*?[\\") {
+		matched, e := path.Match(iv, fv)
+		return e == nil && matched
+	}
+	if !strings.HasSuffix(iv, "*") {
+		return false
+	}
+	prefix := strings.TrimSuffix(iv, "*")
+	return !strings.ContainsAny(prefix, "*?[\\") && !strings.ContainsAny(fv, "?[\\") && strings.HasPrefix(fv, prefix) && !strings.Contains(strings.TrimPrefix(fv, prefix), "/")
 }

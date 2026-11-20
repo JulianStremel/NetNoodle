@@ -81,19 +81,19 @@ func TestProposalResolutionAndRetention(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, state := range []string{"notify", "approved", "rejected", "expired", "resolved"} {
+	for _, state := range []string{"notify", "rejected", "expired", "resolved"} {
 		if stats[state] != 1 {
 			t.Fatal(stats)
 		}
 	}
-	if stats["pending"] != 2 || stats["auto"] != 2 {
+	if stats["pending"] != 2 || stats["auto"] != 2 || stats["approved"] != 2 {
 		t.Fatal(stats)
 	}
 	if err := db.ResolveProposals(ctx, id, []string{"notify-1"}); err != nil {
 		t.Fatal(err)
 	}
 	stats, err = db.ProposalStats(ctx)
-	if err != nil || stats["notify"] != 1 || stats["pending"] != 0 || stats["auto"] != 0 || stats["approved"] != 1 || stats["rejected"] != 1 || stats["resolved"] != 5 {
+	if err != nil || stats["notify"] != 1 || stats["pending"] != 0 || stats["auto"] != 0 || stats["approved"] != 2 || stats["rejected"] != 1 || stats["resolved"] != 5 {
 		t.Fatal(stats, err)
 	}
 	if err := db.ResolveProposals(ctx, id, nil); err != nil {

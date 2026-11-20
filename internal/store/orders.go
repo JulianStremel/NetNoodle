@@ -47,4 +47,10 @@ type Orders interface {
 	ExpireOrders(context.Context, time.Time) error
 	SetProposalOrderState(context.Context, int64, string, string, time.Time) error
 	ScheduleRevert(context.Context, string, time.Time) error
+	MarkRevertBlocked(context.Context, string) (bool, error)
+}
+
+// StrongTarget excludes address/name identifiers even if a source labels them strong.
+func StrongTarget(id proto.Identifier) bool {
+	return id.Strength == proto.Strong && id.Value != "" && id.Kind != "" && id.Kind != "ip" && id.Kind != "hostname"
 }

@@ -104,3 +104,24 @@ func TestPersistentOrderKey(t *testing.T) {
 		t.Fatal("bad fingerprint")
 	}
 }
+
+func TestDurableStateReplacement(t *testing.T) {
+	dir := t.TempDir()
+	name := filepath.Join(dir, "state")
+	for _, value := range []string{"first", "replacement"} {
+		if e := WriteFileDurable(name, []byte(value)); e != nil {
+			t.Fatal(e)
+		}
+		b, e := os.ReadFile(name)
+		if e != nil || string(b) != value {
+			t.Fatal(string(b), e)
+		}
+	}
+	entries, e := os.ReadDir(dir)
+	if e != nil || len(entries) != 1 {
+		t.Fatal("temporary files leaked", entries, e)
+	}
+	if e := WriteFileDurable(dir, []byte("bad")); e == nil {
+		t.Fatal("rename failure ignored")
+	}
+}

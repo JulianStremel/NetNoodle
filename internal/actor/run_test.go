@@ -31,7 +31,7 @@ func TestActorSafetyChecks(t *testing.T) {
 	for _, test := range []string{"signature", "wrong actor", "expired", "every target", "empty allow", "rate", "dry run", "panic", "far future"} {
 		t.Run(test, func(t *testing.T) {
 			_, key, _ := ed25519.GenerateKey(rand.Reader)
-			cfg := actor.Config{NonceFile: filepath.Join(t.TempDir(), "nonces"), MaxPerHour: 1, Backends: []registry.Spec{{Type: "log"}}, Allow: []actor.AllowRule{{Action: "isolate", Targets: []string{"mac=aa:*"}}}}
+			cfg := actor.Config{NonceFile: filepath.Join(t.TempDir(), "nonces"), MaxPerHour: 1, Backends: []registry.Spec{{Type: "log"}}, Allow: []actor.AllowRule{{Action: "isolate", Targets: []string{"mac=aa:*"}}, {Action: "unisolate", Targets: []string{"mac=aa:*"}}}}
 			r, e := actor.NewRunner(cfg, client.Credentials{Role: "actor", Name: "actor", OrderKey: orders.PublicKey(key)})
 			if e != nil {
 				t.Fatal(e)
@@ -91,5 +91,18 @@ func TestActorSafetyChecks(t *testing.T) {
 				t.Fatal("backend not called")
 			}
 		})
+	}
+}
+
+func TestConfigRequiresRevertTargets(t *testing.T) {
+	_, key, _ := ed25519.GenerateKey(rand.Reader)
+	cfg := actor.Config{NonceFile: filepath.Join(t.TempDir(), "nonce"), Backends: []registry.Spec{{Type: "log"}}, Allow: []actor.AllowRule{{Action: "isolate", Targets: []string{"mac=*"}}}}
+	creds := client.Credentials{Role: "actor", Name: "actor", OrderKey: orders.PublicKey(key)}
+	if _, e := actor.NewRunner(cfg, creds); e == nil {
+		t.Fatal("missing inverse accepted")
+	}
+	cfg.Allow = append(cfg.Allow, actor.AllowRule{Action: "unisolate", Targets: []string{"mac=*"}})
+	if _, e := actor.NewRunner(cfg, creds); e != nil {
+		t.Fatal(e)
 	}
 }

@@ -340,23 +340,24 @@ type Settings interface {
 	SetSetting(context.Context, string, string) error
 }
 type Proposal struct {
-	ID          int64          `json:"id"`
-	DeviceID    int64          `json:"device_id"`
-	DeviceName  string         `json:"device_name"`
-	VulnID      string         `json:"vuln_id"`
-	PURL        string         `json:"purl"`
-	Action      string         `json:"action"`
-	Tier        string         `json:"tier"`
-	State       string         `json:"state"`
-	Reason      string         `json:"reason"`
-	DecidedBy   []string       `json:"decided_by"`
-	Params      map[string]any `json:"params"`
-	TTL         int64          `json:"ttl_s"`
-	CreatedAt   time.Time      `json:"created_at"`
-	UpdatedAt   time.Time      `json:"updated_at"`
-	ExpiresAt   time.Time      `json:"expires_at,omitzero"`
-	DecidedUser string         `json:"decided_user"`
-	DecidedAt   time.Time      `json:"decided_at,omitzero"`
+	TargetSnapshot []proto.Identifier `json:"target_snapshot"`
+	ID             int64              `json:"id"`
+	DeviceID       int64              `json:"device_id"`
+	DeviceName     string             `json:"device_name"`
+	VulnID         string             `json:"vuln_id"`
+	PURL           string             `json:"purl"`
+	Action         string             `json:"action"`
+	Tier           string             `json:"tier"`
+	State          string             `json:"state"`
+	Reason         string             `json:"reason"`
+	DecidedBy      []string           `json:"decided_by"`
+	Params         map[string]any     `json:"params"`
+	TTL            int64              `json:"ttl_s"`
+	CreatedAt      time.Time          `json:"created_at"`
+	UpdatedAt      time.Time          `json:"updated_at"`
+	ExpiresAt      time.Time          `json:"expires_at,omitzero"`
+	DecidedUser    string             `json:"decided_user"`
+	DecidedAt      time.Time          `json:"decided_at,omitzero"`
 }
 type ProposalFilter struct {
 	State    string

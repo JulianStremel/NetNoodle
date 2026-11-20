@@ -95,19 +95,7 @@ func (s *Server) evaluateFindings(ctx context.Context, fs []store.FindingRow, no
 			}
 			details[f.DeviceID] = d
 		}
-		n := nodes[f.DeviceID]
-		device := decide.Device{ID: d.ID, Name: d.Name, Kind: d.Kind, Tags: d.Tags, ParentID: d.ParentID, IPs: n.IPs}
-		seenPorts := map[int]bool{}
-		for _, svc := range d.Services {
-			if svc.Component == f.PURL && isExposed(svc.Address) {
-				device.Exposed = true
-				if !seenPorts[svc.Port] {
-					device.Ports = append(device.Ports, svc.Port)
-					seenPorts[svc.Port] = true
-				}
-			}
-		}
-		if e := s.evaluateSituation(ctx, ds, gs, f, decide.Situation{Device: device, Component: f.PURL, Confidence: f.Confidence, Networks: n.Networks, RelatedRisk: n.RelatedRisk, Vuln: intel.Vuln{ID: f.VulnID, Aliases: f.Aliases, Summary: f.Summary, Score: f.Score, Vector: f.Vector, KEV: f.KEV, EPSS: f.EPSS, EPSSPct: f.EPSSPct, Facts: f.Facts}}, batch); e != nil {
+		if e := s.evaluateSituation(ctx, ds, gs, f, findingSituation(d, f, nodes[f.DeviceID]), batch); e != nil {
 			return e
 		}
 	}
@@ -233,4 +221,19 @@ func (s *Server) startReevaluate() {
 			s.log.Warn("reevaluate proposals", "err", e)
 		}
 	}()
+}
+
+func findingSituation(d store.DeviceDetail, f store.FindingRow, n GraphNode) decide.Situation {
+	device := decide.Device{ID: d.ID, Name: d.Name, Kind: d.Kind, Tags: d.Tags, ParentID: d.ParentID, IPs: n.IPs}
+	seenPorts := map[int]bool{}
+	for _, svc := range d.Services {
+		if svc.Component == f.PURL && isExposed(svc.Address) {
+			device.Exposed = true
+			if !seenPorts[svc.Port] {
+				device.Ports = append(device.Ports, svc.Port)
+				seenPorts[svc.Port] = true
+			}
+		}
+	}
+	return decide.Situation{Device: device, Component: f.PURL, Confidence: f.Confidence, Networks: n.Networks, RelatedRisk: n.RelatedRisk, Vuln: intel.Vuln{ID: f.VulnID, Aliases: f.Aliases, Summary: f.Summary, Score: f.Score, Vector: f.Vector, KEV: f.KEV, EPSS: f.EPSS, EPSSPct: f.EPSSPct, Facts: f.Facts}}
 }

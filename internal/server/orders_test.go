@@ -154,7 +154,7 @@ func TestOrdersEndToEnd(t *testing.T) {
 		t.Fatal(len(envs), e)
 	}
 	// Parse after signature verification using the pinned enrollment key.
-	r, e := actor.NewRunner(actor.Config{NonceFile: filepath.Join(t.TempDir(), "nonces"), Backends: []registry.Spec{{Type: "log"}}, Allow: []actor.AllowRule{{Action: "isolate", Targets: []string{"mac=*", "ip=*"}}}}, creds)
+	r, e := actor.NewRunner(actor.Config{NonceFile: filepath.Join(t.TempDir(), "nonces"), Backends: []registry.Spec{{Type: "log"}}, Allow: []actor.AllowRule{{Action: "isolate", Targets: []string{"mac=*", "ip=*"}}, {Action: "unisolate", Targets: []string{"mac=*", "ip=*"}}}}, creds)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -249,6 +249,12 @@ func TestOrderRevertRetryAndResolution(t *testing.T) {
 		t.Fatal(e)
 	}
 	plan(t, s)
+	var empty []orders.Envelope
+	if err := c.Do(ctx, "GET", "/v1/orders?wait=0", nil, &empty); err != nil || len(empty) != 0 {
+		t.Fatal("resolution sent early revert", err)
+	}
+	*now = now.Add(time.Hour)
+	plan(t, s)
 	revert := pollOrder(t, c)
 	for attempt := 1; attempt <= 6; attempt++ {
 		finish(t, s, c, revert, proto.OrderFailed)
@@ -333,7 +339,7 @@ func TestActorRunAgainstServer(t *testing.T) {
 				{Type: "log", Name: "ip", Settings: json.RawMessage(`{"target_id_kinds":["ip"]}`)},
 			}}
 			if allow {
-				cfg.Allow = []actor.AllowRule{{Action: "isolate", Targets: []string{"mac=*", "ip=*"}}}
+				cfg.Allow = []actor.AllowRule{{Action: "isolate", Targets: []string{"mac=*", "ip=*"}}, {Action: "unisolate", Targets: []string{"mac=*", "ip=*"}}}
 			}
 			r, err := actor.NewRunner(cfg, creds)
 			if err != nil {
@@ -451,7 +457,7 @@ func TestActorHelloValidationAndOrderTransitions(t *testing.T) {
 	plan(t, s)
 	late := pollOrder(t, c)
 	*now = now.Add(10 * time.Minute)
-	if err = c.Do(ctx, "POST", "/v1/orders/result", proto.OrderResult{Version: proto.Version, OrderID: late.ID, Status: proto.OrderDone}, nil); err == nil || !strings.Contains(err.Error(), "409") {
+	if err = c.Do(ctx, "POST", "/v1/orders/result", proto.OrderResult{Version: proto.Version, OrderID: late.ID, Status: proto.OrderDone}, nil); err != nil {
 		t.Fatal("expired result", err)
 	}
 }
@@ -490,6 +496,9 @@ func TestOrdersSurviveInventoryMerge(t *testing.T) {
 	if err = s.st.ResolveProposals(ctx, keep, nil); err != nil {
 		t.Fatal(err)
 	}
+	if err = s.st.ScheduleRevert(ctx, o.ID, s.now()); err != nil {
+		t.Fatal(err)
+	}
 	plan(t, s)
 	r := pollOrder(t, c)
 	if r.RevertOf != o.ID {
@@ -498,7 +507,7 @@ func TestOrdersSurviveInventoryMerge(t *testing.T) {
 }
 
 func TestResolutionBeforeOrderResult(t *testing.T) {
-	ts, _, s, now := setupOrders(t)
+	ts, _, s, _ := setupOrders(t)
 	ctx := context.Background()
 	c, _ := enrollOrderActor(t, s, ts, "early")
 	helloActor(t, c, logCaps(t))
@@ -515,8 +524,16 @@ func TestResolutionBeforeOrderResult(t *testing.T) {
 		t.Fatal(got, err)
 	}
 	saved, err := s.st.GetOrder(ctx, o.ID)
-	if err != nil || !saved.RevertDueAt.Equal(*now) {
+	if err != nil || !saved.RevertDueAt.IsZero() {
 		t.Fatal(saved, err)
+	}
+	plan(t, s)
+	var empty []orders.Envelope
+	if err = c.Do(ctx, "GET", "/v1/orders?wait=0", nil, &empty); err != nil || len(empty) != 0 {
+		t.Fatal("resolution sent early revert", err)
+	}
+	if err = s.st.ScheduleRevert(ctx, o.ID, s.now()); err != nil {
+		t.Fatal(err)
 	}
 	plan(t, s)
 	r := pollOrder(t, c)

@@ -251,7 +251,8 @@ func (t *invTx) Merge(keep, drop int64) error {
 		{`UPDATE devices SET parent_id = ? WHERE parent_id = ? AND id <> ?`, []any{keep, drop, keep}},
 		{`INSERT OR IGNORE INTO device_tags(device_id,tag) SELECT ?,tag FROM device_tags WHERE device_id=?`, []any{keep, drop}},
 		// Preserve decisions and signed order history; only mutable rows collide.
-		{`DELETE FROM proposals WHERE device_id=? AND state NOT IN ('approved','rejected','ordered','done','failed','no-actor','reverted','resolved') AND EXISTS (SELECT 1 FROM proposals k WHERE k.device_id=? AND k.vuln_id=proposals.vuln_id AND k.action=proposals.action AND k.state NOT IN ('approved','rejected','ordered','done','failed','no-actor','reverted','resolved'))`, []any{drop, keep}},
+		{`DELETE FROM proposals WHERE device_id=? AND state NOT IN ('auto','approved','rejected','ordered','done','failed','no-actor','reverted','resolved') AND EXISTS (SELECT 1 FROM proposals k WHERE k.device_id=? AND k.vuln_id=proposals.vuln_id AND k.action=proposals.action AND k.state NOT IN ('approved','rejected','ordered','done','failed','no-actor','reverted','resolved'))`, []any{drop, keep}},
+		{`UPDATE proposals SET state='pending',tier='approve',merge_key=id,reason='device identity changed; approve again',target_snapshot='[]',decided_user='',decided_at='',updated_at=?,expires_at=? WHERE device_id=? AND state IN ('approved','auto','no-actor')`, []any{ts(time.Now()), ts(time.Now().Add(7 * 24 * time.Hour)), drop}},
 		{`UPDATE proposals SET device_id=? WHERE device_id=?`, []any{keep, drop}},
 		{`DELETE FROM devices WHERE id = ?`, []any{drop}},
 		{`UPDATE devices SET kind = ?, name = ?, parent_id = ?, attributes = ?, interfaces = ?, first_seen = ?, last_seen = ? WHERE id = ?`,

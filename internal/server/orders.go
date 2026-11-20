@@ -58,6 +58,11 @@ func (s *Server) handleActorOrders(w http.ResponseWriter, r *http.Request) {
 		wait = min(n, 30)
 	}
 	p, _ := peerFrom(r.Context())
+	if !s.acquireOrderPoll(p.ID) {
+		writeErr(w, 429, "too many order polls")
+		return
+	}
+	defer s.releaseOrderPoll(p.ID)
 	t := time.NewTimer(time.Duration(wait) * time.Second)
 	defer t.Stop()
 	for {
@@ -101,6 +106,7 @@ func (s *Server) handleOrderResult(w http.ResponseWriter, r *http.Request) {
 	}
 	p, _ := peerFrom(r.Context())
 	s.orders.run.Lock()
+	previous, previousErr := s.st.GetOrder(r.Context(), result.OrderID)
 	e := s.st.FinishOrder(r.Context(), p.ID, result, s.now())
 	s.orders.run.Unlock()
 	if errors.Is(e, store.ErrNotFound) {
@@ -108,11 +114,15 @@ func (s *Server) handleOrderResult(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if errors.Is(e, store.ErrConflict) {
-		writeErr(w, 409, "order is not sent or has expired")
+		writeErr(w, 409, "order result conflicts or is outside the reporting window")
 		return
 	}
 	if e != nil {
 		writeErr(w, 500, "internal error")
+		return
+	}
+	if previousErr == nil && previous.State == string(result.Status) {
+		writeJSON(w, 200, map[string]string{"status": "ok"})
 		return
 	}
 	if result.Status != proto.OrderDone {
@@ -139,7 +149,7 @@ func (s *Server) handleActors(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleOrders(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	f := store.OrderFilter{State: q.Get("state")}
-	if f.State != "" && !slices.Contains([]string{"queued", "sent", "done", "failed", "rejected", "expired"}, f.State) {
+	if f.State != "" && !slices.Contains([]string{"queued", "sent", "done", "failed", "rejected", "expired", "cancelled", "uncertain"}, f.State) {
 		writeErr(w, 400, "invalid state")
 		return
 	}

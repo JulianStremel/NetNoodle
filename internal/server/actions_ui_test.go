@@ -32,7 +32,7 @@ function el(tag, attrs = {}, ...children) {
   elements.push(n);
   return n;
 }
-const sample = state => ({ id: 1, state, device_id: 1, decided_by: [], reason: '', action: '' });
+const sample = state => ({ id: 1, state, device_id: 1, decided_by: [], reason: '', action: '', target_snapshot: [{kind:'mac',value:'00:11:22:33:44:55',strength:'strong'}] });
 async function api(path) {
   requests.push(path);
   if (path === '/api/decide/settings') return { killswitch: false, rules: [], guards: [], stats: { pending: 900, auto: 800, notify: 700 } };
@@ -46,7 +46,7 @@ async function api(path) {
 }
 let page;
 const registerView = (id, title, view) => { page = view; };
-new Function('api', 'el', 'table', 'fmtTime', 'registerView', 'ago', 'vulnCell', source)(api, el, (cols, rows) => ({rows}), x => x, registerView, x => x, x => x);
+new Function('api', 'el', 'table', 'fmtTime', 'registerView', 'ago', 'vulnCell', source)(api, el, (cols, rows) => ({rows, cols}), x => x, registerView, x => x, x => x);
 (async () => {
   const root = el('main');
   await page(root);
@@ -54,6 +54,8 @@ new Function('api', 'el', 'table', 'fmtTime', 'registerView', 'ago', 'vulnCell',
   assert.ok(requests.includes('/api/proposals?state=auto&limit=500'));
   assert.ok(requests.includes('/api/proposals?state=approved,ordered,done,failed,no-actor,reverted,rejected,expired,resolved,notify&limit=500'));
   assert.equal(root.children[2].children[1].rows[0].state, 'pending');
+  const targetColumn = root.children[2].children[1].cols.find(c => c.title === 'Approved targets');
+  assert.equal(targetColumn.render(sample('approved')), 'mac=00:11:22:33:44:55');
   assert.equal(root.children[3].children[1].rows[0].state, 'auto');
   const strings = n => typeof n === 'string' ? n : (n?.children || []).map(strings).join(' ');
   assert.match(strings(root.children[0]), /pending: 900/);

@@ -30,6 +30,7 @@ async function page(root) {
     { title: "Action", render: (p) => p.action || "Notification" },
     { title: "Tier", render: (p) => el("span", { class: "pill" }, p.tier) },
     { title: "Reason", render: (p) => el("span", { title: p.decided_by.join(", ") }, p.reason) },
+    { title: "Approved targets", render: (p) => (p.target_snapshot || []).map((id) => `${id.kind}=${id.value}`).join(", ") || "None" },
     { title: "TTL", render: (p) => p.ttl_s ? `${p.ttl_s / 3600}h` : "None" },
     { title: "Order", render: (p) => {
       const orders = orderRows.filter((o) => o.proposal_id === p.id);

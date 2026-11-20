@@ -76,7 +76,7 @@ func TestCommandRunDryRunDenyAndReplay(t *testing.T) {
 			}
 			cfg := actor.Config{Credentials: credsPath, NonceFile: filepath.Join(dir, "nonces.json"), Backends: []registry.Spec{{Type: "log"}}}
 			if test != "deny" {
-				cfg.Allow = []actor.AllowRule{{Action: "isolate", Targets: []string{"mac=aa:*"}}}
+				cfg.Allow = []actor.AllowRule{{Action: "isolate", Targets: []string{"mac=aa:*"}}, {Action: "unisolate", Targets: []string{"mac=aa:*"}}}
 			}
 			b, _ := json.Marshal(cfg)
 			configPath := filepath.Join(dir, "actor.json")
