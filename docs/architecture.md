@@ -61,7 +61,7 @@ Only the server sets identifiers of the kind `agent`. It removes them from all o
 
 Rules for agent reports:
 
-- One top-level entity. No children and no parent link (until M4 defines them).
+- One top-level entity. No parent link. Children only of kind `container`, each with one `container.id`; the server replaces it with `agent.child=<agent>/<id>` (D-050).
 - The agent identifier decides the device. On the first report, the agent can take over one device that matches its MAC address, IP address or host name, but only if no other agent has that device.
 - An agent report never merges devices. It never moves a strong identifier from a different device.
 
@@ -88,9 +88,7 @@ The configuration enables the collectors.
 | `dpkg`, `rpm`, `apk` | Installed packages | M2 |
 | `sockets` | Listening sockets, process and package of each socket | M2 |
 | `interfaces` | Network interfaces and MAC addresses | M2 |
-| `containers` | Docker and Podman containers and their packages | M4 |
-| `lxc` | LXC containers on a hypervisor and their packages | M4 |
-| `qga` | Data from the QEMU guest agent. No commands in the guest. | M4 |
+| `containers` | Running LXC, Docker and Podman containers and their packages, through `nn-agent-helper containers` | Done (M4) |
 
 The agent operates as a user without root permissions by default.
 Collectors that need more permissions are optional.
@@ -197,7 +195,7 @@ The Go types are in `internal/proto`. The Rust types are in `agent/nn-proto`.
 | M1 | Ingest API, identity resolver, `nn-scan`, `unifi` source, device list | Done |
 | M2 | Agent enrollment, collectors `os`, `dpkg`, `rpm`, `apk`, `sockets`, `interfaces` | Done |
 | M3 | OSV, KEV and EPSS, findings page | Done |
-| M4 | `proxmox` source, collectors `containers`, `lxc`, `qga`, device tree | In progress: `proxmox` source and device tree done |
+| M4 | `proxmox` source, `containers` collector, device tree, Map page, pull mode, MSRC matcher | Done. `qga` dropped: virtual machines run their own agent (D-050) |
 | M5 | `rules` decider, guards, approval queue, webhook notifier | Not done |
 | M6 | Actor protocol, signed orders, `nn-actor`, `nn-actor-host`, time limits | Not done |
 | M7 | `llm` decider | Not done |
