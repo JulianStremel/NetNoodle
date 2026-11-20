@@ -353,6 +353,8 @@ netnoodle reads devices from Home Assistant, and gives data to Home Assistant fo
        "settings": { "url": "https://ha.local:8123", "token_file": "/etc/netnoodle/ha-token", "fingerprint": "<sha256>" } } ] }
    ```
 
+Use `https` with `"fingerprint"` of the Home Assistant certificate. Plain `http` is permitted only for a Home Assistant on the same computer (`127.0.0.1`), because the token is an administrator token.
+
 The source reads the device registry (manufacturer, model, firmware, MAC addresses), the device trackers (IP addresses) and the versions of Home Assistant, Home Assistant OS and the add-ons. The server compares the Home Assistant version with the OSV data (ecosystem PyPI). Devices merge with the same devices from UniFi or the scanner by their MAC address.
 
 **Give data to Home Assistant** (MQTT discovery):
@@ -376,7 +378,11 @@ The source reads the device registry (manufacturer, model, firmware, MAC address
 3. For a risk sensor of a device, give the device the tag `ha` on its device page.
 4. All events go to the topic `netnoodle/event` (JSON). Use them as MQTT triggers in automations.
 
-If nn-server stops, the entities become unavailable (MQTT last will). Without the key `mqtt`, nothing is published. `mqtt://` without TLS is permitted only for a broker on the same computer, or with `"allow_plain": true`.
+If nn-server stops, the entities become unavailable (MQTT last will). Without the key `mqtt`, nothing is published. `mqtt://` without TLS is permitted only for a broker on the same computer, or with `"allow_plain": true`. For a broker with a self-signed certificate, write its SHA-256 fingerprint in `"fingerprint"`.
+
+Only these events go to `netnoodle/event`, without their detail text: `device.new`, `finding.new`, `proposal.pending`, `order.done`, `order.failed`, `order.uncertain`, `order.expired`, `order.revert-blocked`. Change the list with `"events"` and add the detail text with `"event_details": true`.
+
+> **Caution:** Configure the access control list of the broker: only netnoodle may write `netnoodle/#` and `homeassistant/+/netnoodle_*/#`, and only Home Assistant may read them. Other clients could otherwise read the inventory or send false states that start automations.
 
 ## Procedure: send notifications
 

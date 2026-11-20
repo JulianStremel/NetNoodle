@@ -330,7 +330,7 @@ func TestDiscoveryStatesEventsDebounceAndReconnect(t *testing.T) {
 	for _, m := range b.messages {
 		if m.topic == "netnoodle/event" {
 			var ev map[string]any
-			if json.Unmarshal(m.payload, &ev) != nil || len(ev) != 6 || ev["type"] != e.Type || ev["severity"] != e.Severity || ev["title"] != e.Title || ev["detail"] != e.Detail || ev["link"] != e.Link || ev["at"] == nil || m.retained {
+			if json.Unmarshal(m.payload, &ev) != nil || len(ev) != 6 || ev["type"] != e.Type || ev["severity"] != e.Severity || ev["title"] != e.Title || ev["detail"] != "" /* details are off by default */ || ev["link"] != e.Link || ev["at"] == nil || m.retained {
 				t.Errorf("event = %s", m.payload)
 			}
 		}
@@ -342,7 +342,9 @@ func TestDiscoveryStatesEventsDebounceAndReconnect(t *testing.T) {
 	b.await(t, func(b *broker) bool { return string(b.retained["netnoodle/kill_switch/state"]) == "ON" })
 	b.await(t, func(b *broker) bool {
 		for topic := range b.retained {
-			if strings.HasSuffix(topic, "/"+risk+"/config") {
+			// Untagging removes the config AND the retained state and
+			// attributes (they name findings).
+			if strings.HasSuffix(topic, "/"+risk+"/config") || topic == "netnoodle/"+risk+"/state" || topic == "netnoodle/"+risk+"/attributes" {
 				return false
 			}
 		}
@@ -410,7 +412,7 @@ func TestSettingsAndBoundedQueue(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < queueSize+10; i++ {
-		p.Notify(context.Background(), notify.Event{Title: strconv.Itoa(i)})
+		p.Notify(context.Background(), notify.Event{Type: "device.new", Title: strconv.Itoa(i)})
 	}
 	if len(p.events) != queueSize || len(p.wake) != 1 {
 		t.Fatalf("queue lengths = %d, %d", len(p.events), len(p.wake))
@@ -470,5 +472,30 @@ func TestPeriodicPublishingAndCustomTag(t *testing.T) {
 	}
 	if _, ok := b.retained["netnoodle/risk_"+digest("excluded")+"/state"]; ok {
 		t.Error("device without custom tag was published")
+	}
+}
+
+func TestEventAllowlistAndDetails(t *testing.T) {
+	provider := func(context.Context) (Snapshot, error) { return Snapshot{}, nil }
+	p, err := New(json.RawMessage(`{"broker":"mqtt://127.0.0.1"}`), provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Notify(context.Background(), notify.Event{Type: "device.claimed", Title: "claim", Detail: "agent x"})
+	p.Notify(context.Background(), notify.Event{Type: "proposal.notify", Title: "n"})
+	p.Notify(context.Background(), notify.Event{Type: "device.new", Title: "New device: cam", Detail: "mac=aa:bb:cc:00:00:01, ip=10.0.0.9"})
+	if len(p.events) != 1 {
+		t.Fatalf("events queued = %d, want only device.new", len(p.events))
+	}
+	if e := <-p.events; e.Detail != "" {
+		t.Fatalf("detail published by default: %q", e.Detail)
+	}
+	p, _ = New(json.RawMessage(`{"broker":"mqtt://127.0.0.1","events":["device.claimed"],"event_details":true}`), provider)
+	p.Notify(context.Background(), notify.Event{Type: "device.claimed", Title: "claim", Detail: "agent x"})
+	if e := <-p.events; e.Detail != "agent x" {
+		t.Fatalf("configured details missing: %+v", e)
+	}
+	if _, err := New(json.RawMessage(`{"broker":"mqtts://broker.lan","fingerprint":"zz"}`), provider); err == nil {
+		t.Fatal("bad fingerprint accepted")
 	}
 }

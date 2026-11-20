@@ -56,8 +56,11 @@ func New(name string, raw json.RawMessage) (source.Source, error) {
 	}
 	host := strings.ToLower(u.Hostname())
 	if u.Scheme != "https" {
-		if u.Scheme != "http" || !s.AllowHTTP || !(host == "127.0.0.1" || host == "::1" || strings.HasSuffix(host, ".local")) {
-			return nil, errors.New("homeassistant: http requires allow_http and a loopback or .local host")
+		// Plain http only on the same computer. Names under .local are
+		// resolved by unauthenticated mDNS, so any device on the LAN could
+		// answer and receive the (administrator) token.
+		if u.Scheme != "http" || !s.AllowHTTP || !(host == "127.0.0.1" || host == "::1") {
+			return nil, errors.New("homeassistant: http requires allow_http and a loopback host; use https with fingerprint for a LAN host")
 		}
 	}
 	if name == "" || len(name) > maxField || s.TokenFile == "" {

@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net"
 	"net/netip"
 	"net/url"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/JulianStremel/netnoodle/internal/notify"
 	"github.com/JulianStremel/netnoodle/internal/registry"
+	"github.com/JulianStremel/netnoodle/internal/tlspin"
 	paho "github.com/eclipse/paho.mqtt.golang"
 )
 
@@ -33,7 +35,24 @@ type Settings struct {
 	DiscoveryPrefix string `json:"discovery_prefix"`
 	Interval        string `json:"interval"`
 	DeviceTag       string `json:"device_tag"`
+	// Events are the event types published to <prefix>/event. Default:
+	// defaultEvents. Other events (proposal details, claims, ...) stay
+	// inside netnoodle.
+	Events []string `json:"events"`
+	// EventDetails also publishes the detail text of an event. Off by
+	// default: details can name identifiers of devices that are not
+	// tagged for Home Assistant.
+	EventDetails bool `json:"event_details"`
+	// Fingerprint pins the broker certificate (SHA-256 hex), for a broker
+	// with a self-signed certificate.
+	Fingerprint string `json:"fingerprint"`
 }
+
+var defaultEvents = []string{"device.new", "finding.new", "proposal.pending", "order.done", "order.failed", "order.uncertain", "order.expired", "order.revert-blocked"}
+
+// republishEvery re-sends the retained discovery configs every N snapshots,
+// so a config that another broker client changed is repaired.
+const republishEvery = 10
 
 // Snapshot contains only the data exported to Home Assistant. Collecting it is
 // done in the publisher worker, never on an ingest or matching goroutine.
@@ -66,8 +85,12 @@ type Publisher struct {
 	wake                       chan struct{}
 	events                     chan notify.Event
 	mu                         sync.Mutex // serialize drop-oldest producers
-	// Only the Run goroutine accesses configs.
-	configs map[string]string
+	// Only the Run goroutine accesses configs, bases and cycles.
+	configs     map[string]string
+	bases       map[string]string // config topic → state/attributes base topic
+	cycles      int
+	allowEvents map[string]bool
+	tls         *tls.Config
 }
 
 // New validates settings and reads the password file once at startup. Errors
@@ -131,7 +154,20 @@ func New(raw json.RawMessage, provider Provider) (*Publisher, error) {
 	if provider == nil {
 		return nil, errors.New("mqtt: data provider required")
 	}
-	return &Publisher{s: s, broker: u.String(), password: password, identity: "netnoodle_" + digest(s.TopicPrefix+"/"+s.ClientID), interval: every, provider: provider, wake: make(chan struct{}, 1), events: make(chan notify.Event, queueSize), configs: map[string]string{}}, nil
+	if s.Events == nil {
+		s.Events = defaultEvents
+	}
+	allowed := map[string]bool{}
+	for _, e := range s.Events {
+		allowed[e] = true
+	}
+	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12}
+	if s.Fingerprint != "" {
+		if tlsCfg, err = tlspin.Config(s.Fingerprint, false); err != nil {
+			return nil, errors.New("mqtt: fingerprint must be 64 hex characters")
+		}
+	}
+	return &Publisher{s: s, broker: u.String(), password: password, identity: "netnoodle_" + digest(s.TopicPrefix+"/"+s.ClientID), interval: every, provider: provider, wake: make(chan struct{}, 1), events: make(chan notify.Event, queueSize), configs: map[string]string{}, bases: map[string]string{}, allowEvents: allowed, tls: tlsCfg}, nil
 }
 
 func validPrefix(s string) bool {
@@ -151,7 +187,13 @@ func (p *Publisher) Trigger() {
 // Notify copies the event's scalar fields into a bounded drop-oldest queue.
 // Fields are intentionally excluded from the public event payload.
 func (p *Publisher) Notify(_ context.Context, e notify.Event) error {
+	if !p.allowEvents[e.Type] {
+		return nil
+	}
 	e.Fields = nil
+	if !p.s.EventDetails {
+		e.Detail = ""
+	}
 	if e.At.IsZero() {
 		e.At = time.Now().UTC()
 	}
@@ -204,12 +246,21 @@ func (p *Publisher) Run(ctx context.Context) {
 			SetUsername(p.s.Username).SetPassword(p.password).SetAutoReconnect(false).
 			SetConnectRetry(false).SetConnectTimeout(5*time.Second).SetWriteTimeout(5*time.Second).
 			SetKeepAlive(15*time.Second).SetPingTimeout(5*time.Second).
-			SetTLSConfig(&tls.Config{MinVersion: tls.VersionTLS12}).
+			SetTLSConfig(p.tls).
 			SetWill(p.s.TopicPrefix+"/availability", "offline", 1, true)
 		c := paho.NewClient(opts)
 		connectCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
-		connected := waitToken(connectCtx, c.Connect())
+		tok := c.Connect()
+		connected := waitToken(connectCtx, tok)
 		cancel()
+		if !connected && ctx.Err() == nil {
+			// Generic reason only: broker replies are not logged.
+			reason := "timeout"
+			if err := tok.Error(); err != nil {
+				reason = "connection refused or TLS/authentication failed"
+			}
+			slog.Warn("mqtt: cannot connect to broker", "reason", reason, "retry_in", backoff)
+		}
 		if connected {
 			backoff = time.Second
 			p.connected(ctx, c)
@@ -346,6 +397,7 @@ func (p *Publisher) snapshot(ctx context.Context, c paho.Client, s Snapshot) boo
 			return false
 		}
 		active[topic] = true
+		p.bases[topic] = base
 		if p.configs[topic] != string(b) {
 			if !p.send(ctx, c, topic, true, b) {
 				return false
@@ -364,13 +416,28 @@ func (p *Publisher) snapshot(ctx context.Context, c paho.Client, s Snapshot) boo
 			return false
 		}
 	}
-	// Removing the opt-in tag removes its retained discovery config too.
+	// Removing the opt-in tag removes its retained discovery config and
+	// its retained state and attributes (they name findings).
 	for topic := range p.configs {
 		if !active[topic] {
 			if !p.send(ctx, c, topic, true, nil) {
 				return false
 			}
+			if base := p.bases[topic]; base != "" {
+				if !p.send(ctx, c, base+"/state", true, nil) || !p.send(ctx, c, base+"/attributes", true, nil) {
+					return false
+				}
+			}
 			delete(p.configs, topic)
+			delete(p.bases, topic)
+		}
+	}
+	// Re-send the retained configs now and then, so a config that another
+	// broker client overwrote is repaired.
+	p.cycles++
+	if p.cycles%republishEvery == 0 {
+		for topic := range p.configs {
+			p.configs[topic] = ""
 		}
 	}
 	return true

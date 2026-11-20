@@ -199,7 +199,7 @@ func TestSettingsValidation(t *testing.T) {
 		url       string
 		allow, ok bool
 	}{
-		{"https://ha.local:8123", false, true}, {"http://ha.local:8123", false, false}, {"http://ha.local:8123", true, true},
+		{"https://ha.local:8123", false, true}, {"http://ha.local:8123", false, false}, {"http://ha.local:8123", true, false}, {"http://127.0.0.1:8123", true, true},
 		{"http://127.0.0.1:8123", true, true}, {"http://[::1]:8123", true, true}, {"http://localhost", true, false},
 		{"http://example.com", true, false}, {"http://192.168.1.2", true, false}, {"ws://ha.local", true, false},
 		{"https://user:secret@ha.local", false, false}, {"https://ha.local/path", false, false}, {"https://ha.local?token=secret", false, false},
