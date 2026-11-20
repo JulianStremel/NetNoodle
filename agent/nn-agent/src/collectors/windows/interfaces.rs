@@ -20,6 +20,30 @@ fn mac(bytes: &[u8]) -> String {
     }
 }
 
+/// Specific product names take precedence over the generic virtual/tunnel type.
+fn classify_vpn(description: &str, friendly_name: &str, if_type: u32) -> &'static str {
+    let description = description.to_ascii_lowercase();
+    let friendly_name = friendly_name.to_ascii_lowercase();
+    for (needle, vpn) in [
+        ("tailscale", "tailscale"),
+        ("wireguard", "wireguard"),
+        ("zerotier", "zerotier"),
+        ("tap-windows", "tun"),
+        ("wintun", "tun"),
+        ("openvpn", "tun"),
+    ] {
+        if description.contains(needle) || friendly_name.contains(needle) {
+            return vpn;
+        }
+    }
+    // IF_TYPE_PROP_VIRTUAL / IF_TYPE_TUNNEL, kept independent of Windows APIs.
+    if matches!(if_type, 53 | 131) {
+        "tun"
+    } else {
+        ""
+    }
+}
+
 #[cfg(windows)]
 pub struct Interfaces;
 #[cfg(windows)]
@@ -74,13 +98,14 @@ impl crate::collector::Collector for Interfaces {
                 // SAFETY: successful API returns a linked list within the still-live aligned buffer.
                 let a = unsafe { &*adapter };
                 adapter = a.Next;
-                if a.OperStatus != IfOperStatusUp
-                    || matches!(a.IfType, IF_TYPE_SOFTWARE_LOOPBACK | IF_TYPE_TUNNEL)
-                {
+                if a.OperStatus != IfOperStatusUp || a.IfType == IF_TYPE_SOFTWARE_LOOPBACK {
                     continue;
                 }
                 // SAFETY: FriendlyName is a terminated string supplied by GetAdaptersAddresses.
                 let name = unsafe { string(a.FriendlyName) };
+                // SAFETY: Description is a terminated string supplied by GetAdaptersAddresses.
+                let description = unsafe { string(a.Description) };
+                let vpn = classify_vpn(&description, &name, a.IfType);
                 let mac = mac(&a.PhysicalAddress
                     [..(a.PhysicalAddressLength as usize).min(a.PhysicalAddress.len())]);
                 let mut ips = Vec::new();
@@ -121,9 +146,13 @@ impl crate::collector::Collector for Interfaces {
                 ips.sort();
                 ips.dedup();
                 if !mac.is_empty() || !ips.is_empty() {
-                    c.host
-                        .interfaces
-                        .push(nn_proto::Interface { name, mac, ips });
+                    c.host.interfaces.push(nn_proto::Interface {
+                        name,
+                        mac,
+                        ips,
+                        kind: if vpn.is_empty() { "" } else { "vpn" }.into(),
+                        vpn: vpn.into(),
+                    });
                 }
             }
             c.host.interfaces.sort_by(|a, b| a.name.cmp(&b.name));
@@ -136,6 +165,37 @@ impl crate::collector::Collector for Interfaces {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn vpn_adapter_names_and_types() {
+        for (description, name, if_type, expected) in [
+            ("Tailscale Tunnel", "Ethernet", 53, "tailscale"),
+            ("Wintun Userspace Tunnel", "tAiLsCaLe", 131, "tailscale"),
+            ("WireGuard Tunnel", "Office", 131, "wireguard"),
+            ("Wintun", "office WIREGUARD tunnel", 53, "wireguard"),
+            ("ZeroTier One Virtual Port", "Ethernet", 6, "zerotier"),
+            ("Virtual Port", "zeROtier One", 53, "zerotier"),
+            ("TAP-Windows Adapter V9", "Ethernet", 6, "tun"),
+            ("Adapter", "tap-WINDOWS", 6, "tun"),
+            ("wInTuN Userspace Tunnel", "Ethernet", 6, "tun"),
+            ("Adapter", "WINTUN", 6, "tun"),
+            ("OpenVPN Data Channel Offload", "Ethernet", 6, "tun"),
+            ("Adapter", "my OPENvpn connection", 6, "tun"),
+            ("Unknown", "Renamed adapter", 53, "tun"),
+            ("", "", 131, "tun"),
+            ("Intel Ethernet", "Ethernet", 6, ""),
+            ("Hyper-V Virtual Ethernet Adapter", "vEthernet", 6, ""),
+            ("Wi-Fi", "Wi-Fi", 71, ""),
+            ("Loopback", "Loopback", 24, ""),
+            ("", "", 0, ""),
+        ] {
+            assert_eq!(
+                classify_vpn(description, name, if_type),
+                expected,
+                "{description} / {name} / {if_type}"
+            );
+        }
+    }
+
     #[test]
     fn addresses_and_mac() {
         for s in [

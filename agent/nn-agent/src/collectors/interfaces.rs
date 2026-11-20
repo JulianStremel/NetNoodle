@@ -12,6 +12,33 @@ fn skip_iface(name: &str) -> bool {
     name == "lo" || name.starts_with("veth") || name.starts_with("fwpr") || name.starts_with("fwln")
 }
 
+/// Classify only the supplied name and sysfs evidence; no platform APIs needed.
+fn classify_vpn(name: &str, if_type: &str, uevent: &str, has_tun_flags: bool) -> &'static str {
+    // Kernel evidence wins over a potentially renamed interface.
+    if if_type.trim().parse::<u32>() == Ok(65534)
+        && uevent.lines().any(|line| line == "DEVTYPE=wireguard")
+    {
+        "wireguard"
+    } else if name.starts_with("tailscale") {
+        "tailscale"
+    } else if name.starts_with("wg") {
+        "wireguard"
+    } else if name.starts_with("zt") {
+        "zerotier"
+    } else if name.starts_with("tun") || name.starts_with("tap") || has_tun_flags {
+        "tun"
+    } else {
+        ""
+    }
+}
+
+fn read_vpn(ctx: &Ctx, name: &str) -> &'static str {
+    let dir = ctx.path("/sys/class/net").join(name);
+    let if_type = std::fs::read_to_string(dir.join("type")).unwrap_or_default();
+    let uevent = std::fs::read_to_string(dir.join("uevent")).unwrap_or_default();
+    classify_vpn(name, &if_type, &uevent, dir.join("tun_flags").exists())
+}
+
 /// Addresses that are the same on many hosts or useless to find the host.
 pub fn useful_ip(ip: &IpAddr) -> bool {
     match ip {
@@ -90,6 +117,7 @@ pub fn build(macs: BTreeMap<String, String>, ips: BTreeMap<String, Vec<IpAddr>>)
             name,
             mac,
             ips: list,
+            ..Default::default()
         });
     }
     out
@@ -102,7 +130,12 @@ impl Collector for Interfaces {
 
     fn access(&self) -> Access {
         Access {
-            reads: vec!["/sys/class/net/*/address"],
+            reads: vec![
+                "/sys/class/net/*/address",
+                "/sys/class/net/*/type",
+                "/sys/class/net/*/uevent",
+                "/sys/class/net/*/tun_flags",
+            ],
             sockets: vec!["netlink (getifaddrs, read only)"],
             ..Default::default()
         }
@@ -120,6 +153,13 @@ impl Collector for Interfaces {
         };
         let mut c = Contribution::default();
         c.host.interfaces = build(macs, ips);
+        for interface in &mut c.host.interfaces {
+            let vpn = read_vpn(ctx, &interface.name);
+            if !vpn.is_empty() {
+                interface.kind = "vpn".into();
+                interface.vpn = vpn.into();
+            }
+        }
         Ok(c)
     }
 }
@@ -127,6 +167,81 @@ impl Collector for Interfaces {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vpn_names_and_sysfs_evidence() {
+        for (name, expected) in [
+            ("tailscale0", "tailscale"),
+            ("tailscale-test", "tailscale"),
+            ("wg0", "wireguard"),
+            ("wg-office", "wireguard"),
+            ("ztabc123", "zerotier"),
+            ("tun0", "tun"),
+            ("tap-office", "tun"),
+            ("eth0", ""),
+            ("docker0", ""),
+            ("br0", ""),
+            ("mywg0", ""),
+            ("", ""),
+        ] {
+            assert_eq!(classify_vpn(name, "", "", false), expected, "{name}");
+        }
+        for (if_type, uevent, expected) in [
+            (
+                "65534\n",
+                "INTERFACE=private0\nDEVTYPE=wireguard\n",
+                "wireguard",
+            ),
+            ("1", "DEVTYPE=wireguard\n", ""),
+            ("invalid", "DEVTYPE=wireguard\n", ""),
+            ("", "DEVTYPE=wireguard\n", ""),
+            ("65534", "", ""),
+            ("65534", "DEVTYPE=gre\n", ""),
+            ("65534", "OTHER_DEVTYPE=wireguard\n", ""),
+            ("65534", "DEVTYPE=wireguard-extra\n", ""),
+        ] {
+            assert_eq!(classify_vpn("private0", if_type, uevent, false), expected);
+        }
+        assert_eq!(classify_vpn("private0", "", "", true), "tun");
+        for (name, expected) in [
+            ("tailscale0", "tailscale"),
+            ("wg0", "wireguard"),
+            ("zt0", "zerotier"),
+        ] {
+            assert_eq!(classify_vpn(name, "", "", true), expected);
+            assert_eq!(
+                classify_vpn(name, "65534", "DEVTYPE=wireguard", true),
+                "wireguard"
+            );
+        }
+    }
+
+    #[test]
+    fn vpn_sysfs_fixture_marks_host_interfaces() {
+        let ctx = super::super::testctx("vpn");
+        let interfaces = Interfaces.collect(&ctx).unwrap().host.interfaces;
+        assert_eq!(interfaces.len(), 10);
+        for (name, expected) in [
+            ("tailscale0", "tailscale"),
+            ("wg0", "wireguard"),
+            ("zt0", "zerotier"),
+            ("tun0", "tun"),
+            ("tap0", "tun"),
+            ("overlay0", "wireguard"),
+            ("private0", "tun"),
+            ("tailscale9", "wireguard"),
+            ("eth0", ""),
+            ("other0", ""),
+        ] {
+            assert_eq!(read_vpn(&ctx, name), expected, "{name}");
+            let interface = interfaces.iter().find(|i| i.name == name).unwrap();
+            assert_eq!(interface.vpn, expected, "{name}");
+            assert_eq!(interface.kind, if expected.is_empty() { "" } else { "vpn" });
+            assert_eq!(interface.mac, "02:00:00:00:00:01");
+            assert!(interface.ips.is_empty());
+        }
+        assert_eq!(read_vpn(&ctx, "missing0"), "");
+    }
 
     #[test]
     fn sysfs_and_ips() {
@@ -147,5 +262,30 @@ mod tests {
         assert_eq!(ifs[1].mac, "00:1a:2b:3c:4d:5e");
         assert_eq!(ifs[1].ips, vec!["192.168.1.20", "2001:db8::20"]);
         assert_eq!(ifs[0].ips, Vec::<String>::new());
+        assert!(ifs.iter().all(|i| i.kind.is_empty() && i.vpn.is_empty()));
+    }
+
+    #[test]
+    fn vpn_without_mac_keeps_useful_ips() {
+        let interfaces = build(
+            BTreeMap::from([
+                ("tun0".into(), String::new()),
+                ("tap0".into(), String::new()),
+            ]),
+            BTreeMap::from([(
+                "tun0".into(),
+                vec![
+                    "100.64.1.2".parse().unwrap(),
+                    "100.64.1.2".parse().unwrap(),
+                    "fd7a:115c:a1e0::1".parse().unwrap(),
+                    "127.0.0.1".parse().unwrap(),
+                    "fe80::1".parse().unwrap(),
+                ],
+            )]),
+        );
+        assert_eq!(interfaces.len(), 1);
+        assert_eq!(interfaces[0].name, "tun0");
+        assert!(interfaces[0].mac.is_empty());
+        assert_eq!(interfaces[0].ips, ["100.64.1.2", "fd7a:115c:a1e0::1"]);
     }
 }

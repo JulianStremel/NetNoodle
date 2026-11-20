@@ -93,6 +93,10 @@ pub struct Interface {
     pub mac: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ips: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub vpn: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -198,6 +202,35 @@ pub struct OrderResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interface_vpn_fields_are_optional() {
+        let json = serde_json::json!({"name": "eth0", "ips": ["192.168.1.2"]});
+        let interface: Interface = serde_json::from_value(json.clone()).unwrap();
+        assert!(interface.kind.is_empty());
+        assert!(interface.vpn.is_empty());
+        assert_eq!(serde_json::to_value(interface).unwrap(), json);
+        assert_eq!(
+            serde_json::to_value(Interface::default()).unwrap(),
+            serde_json::json!({})
+        );
+
+        for vpn in ["tailscale", "wireguard", "zerotier", "tun"] {
+            let interface = Interface {
+                name: "vpn0".into(),
+                kind: "vpn".into(),
+                vpn: vpn.into(),
+                ..Default::default()
+            };
+            let json = serde_json::to_value(&interface).unwrap();
+            assert_eq!(json["kind"], "vpn");
+            assert_eq!(json["vpn"], vpn);
+            assert_eq!(
+                serde_json::from_value::<Interface>(json).unwrap(),
+                interface
+            );
+        }
+    }
 
     #[test]
     fn observation_round_trip_uses_wire_names() {
