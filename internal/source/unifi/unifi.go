@@ -33,7 +33,13 @@ import (
 )
 
 func init() {
-	source.Registry.Register("unifi", New)
+	source.Registry.RegisterWithSchema("unifi", New, source.SettingsSchema(
+		source.Field{Key: "url", Label: "Console URL", Type: "url", Required: true, Help: "HTTPS address of the UniFi console."},
+		source.Field{Key: "api_key", Label: "API key", Type: "secret", Required: true, Help: "Read-only Network Integration API key."},
+		source.Field{Key: "fingerprint", Label: "Certificate fingerprint", Type: "fingerprint", Help: "SHA-256 of the server certificate. Empty uses system trust."},
+		source.Field{Key: "api_path", Label: "API path", Type: "string", Default: "/proxy/network/integration/v1", Help: "Change for a self-hosted controller if needed."},
+		source.Field{Key: "sites", Label: "Sites", Type: "list", Help: "Site names or IDs, one per line. Empty selects all sites."},
+	))
 }
 
 // Settings configure the source.

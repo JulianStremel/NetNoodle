@@ -32,7 +32,16 @@ import (
 	"github.com/JulianStremel/netnoodle/internal/tlspin"
 )
 
-func init() { source.Registry.Register("proxmox", New) }
+func init() {
+	source.Registry.RegisterWithSchema("proxmox", New, source.SettingsSchema(
+		source.Field{Key: "url", Label: "Node URL", Type: "url", Required: true, Help: "HTTPS address, for example https://pve1:8006."},
+		source.Field{Key: "token_id", Label: "Token ID", Type: "string", Required: true, Help: "Read-only token: user@realm!name."},
+		source.Field{Key: "token_secret", Label: "Token secret", Type: "secret", Required: true, Help: "Secret of the read-only API token."},
+		source.Field{Key: "fingerprint", Label: "Certificate fingerprint", Type: "fingerprint", Help: "SHA-256 of the node certificate. Empty uses system trust."},
+		source.Field{Key: "guest_agent", Label: "Query guest agents", Type: "bool", Default: true, Help: "Get guest IP addresses and operating systems."},
+		source.Field{Key: "include_templates", Label: "Include templates", Type: "bool", Default: false, Help: "Also report VM templates."},
+	))
+}
 
 // Settings configure the source.
 type Settings struct {

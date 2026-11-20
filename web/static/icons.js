@@ -6,6 +6,7 @@ const paths = {
   devices: ['M8 20h8'],
   actions: ['M5 12l4 4L19 6'],
   peers: ['M9 7V3M15 7V3M7 7h10v5a5 5 0 0 1-10 0zM12 17v4'],
+  integrations: ['M8 3v5M16 3v5M5 8h14v3a7 7 0 0 1-14 0zM12 18v3'],
   events: ['M4 6h16M4 12h16M4 18h10'],
   chevron: ['M15 5l-7 7 7 7'],
 };

@@ -7,6 +7,7 @@ import "./findings.js";
 import "./devices.js";
 import "./actions.js";
 import "./peers.js";
+import "./integrations.js";
 import "./system.js";
 
 start();

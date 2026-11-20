@@ -29,11 +29,19 @@ const (
 	maxDeviceMACs  = 4
 )
 
-func init() { source.Registry.Register("homeassistant", New) }
+func init() {
+	source.Registry.RegisterWithSchema("homeassistant", New, source.SettingsSchema(
+		source.Field{Key: "url", Label: "Home Assistant URL", Type: "url", Required: true, Help: "HTTPS address of Home Assistant."},
+		source.Field{Key: "token", Label: "Access token", Type: "secret", Required: true, Help: "Long-lived access token of a dedicated administrator user."},
+		source.Field{Key: "fingerprint", Label: "Certificate fingerprint", Type: "fingerprint", Help: "SHA-256 of the server certificate. Empty uses system trust."},
+		source.Field{Key: "include_trackers", Label: "Include device trackers", Type: "bool", Default: true, Help: "Read IP addresses from device trackers."},
+	))
+}
 
 type Settings struct {
 	URL             string `json:"url"`
 	TokenFile       string `json:"token_file"`
+	Token           string `json:"token"`
 	Fingerprint     string `json:"fingerprint"`
 	Insecure        bool   `json:"insecure_skip_verify"`
 	AllowHTTP       bool   `json:"allow_http"`
@@ -64,14 +72,17 @@ func New(name string, raw json.RawMessage) (source.Source, error) {
 			return nil, errors.New("homeassistant: http requires allow_http and a loopback host; use https with fingerprint for a LAN host")
 		}
 	}
-	if name == "" || len(name) > maxField || s.TokenFile == "" {
+	if name == "" || len(name) > maxField || (s.TokenFile == "" && s.Token == "") {
 		return nil, errors.New("homeassistant: source name and token_file are required")
 	}
-	b, err := os.ReadFile(s.TokenFile)
-	if err != nil {
-		return nil, errors.New("homeassistant: cannot read token_file")
+	token := strings.TrimSpace(s.Token)
+	if token == "" && s.TokenFile != "" {
+		b, err := os.ReadFile(s.TokenFile)
+		if err != nil {
+			return nil, errors.New("homeassistant: cannot read token_file")
+		}
+		token = strings.TrimSpace(string(b))
 	}
-	token := strings.TrimSpace(string(b))
 	if token == "" || len(token) > 64<<10 || strings.ContainsAny(token, "\r\n") {
 		return nil, errors.New("homeassistant: invalid token_file")
 	}

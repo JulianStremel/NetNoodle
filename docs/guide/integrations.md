@@ -4,8 +4,20 @@ Import from UniFi, Proxmox VE and Home Assistant, give data to Home Assistant, a
 
 [← Back to the README](../../README.md)
 
-## Procedure: import from UniFi
+## Set up in the web interface
 
+1. Log in as **admin** and open **Integrations**.
+2. Select **Add integration**, choose UniFi, Proxmox, Tailscale or Home Assistant, then select **Next**.
+3. Enter a unique name, the server address and read-only credentials. Home Assistant needs a dedicated administrator token to read its device registry.
+4. For a self-signed certificate, select **Fetch fingerprint**. Compare the SHA-256 fingerprint with the certificate on the source server through a trusted connection. Confirm it only if they match. You can also enter a known fingerprint yourself. Leave it empty to use normal certificate checks.
+5. Select **Test connection**. This reads once and counts entities. It does not import data.
+6. Enter your administrator password and select **Save**. Polling starts without a server restart.
+
+Use **Edit**, **Enable**, **Disable** or **Delete** on this page to change an integration. Each change needs your administrator password. Leave a secret field empty when editing to keep its saved value. Sources from `netnoodle.json` show as **from config file** and are read only here.
+
+Credentials are stored in a separate column in the database. The data directory is private (0700) and the database file is private (0600). Storing credentials on the same disk as the order signing key is an accepted risk: anyone who can read that disk can read them. APIs show only whether a credential is set. Local database backups keep credentials; `nn-server export` removes them and disables the exported integrations. Enter credentials again after restoring an export.
+
+## Procedure: import from UniFi
 1. In UniFi Network, open **Settings > Control Plane > Integrations**.
 2. Create an API key.
 3. Get the SHA-256 fingerprint of the console certificate.

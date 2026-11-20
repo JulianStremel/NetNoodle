@@ -17,14 +17,76 @@ type Factory[T any] func(name string, settings json.RawMessage) (T, error)
 
 // Registry maps type names to factories for one interface T.
 type Registry[T any] struct {
-	kind string
-	mu   sync.RWMutex
-	f    map[string]Factory[T]
+	kind    string
+	mu      sync.RWMutex
+	f       map[string]Factory[T]
+	schemas map[string]Schema
 }
 
 // New returns an empty registry. kind is used in error messages only.
 func New[T any](kind string) *Registry[T] {
-	return &Registry[T]{kind: kind, f: map[string]Factory[T]{}}
+	return &Registry[T]{kind: kind, f: map[string]Factory[T]{}, schemas: map[string]Schema{}}
+}
+
+// Field describes one operator-editable setting. Secret values are write-only.
+type Field struct {
+	Key      string `json:"key"`
+	Label    string `json:"label"`
+	Type     string `json:"type"`
+	Required bool   `json:"required"`
+	Default  any    `json:"default,omitempty"`
+	Help     string `json:"help"`
+}
+
+type Schema struct {
+	Fields []Field `json:"fields"`
+}
+
+// RegisterWithSchema registers a constructor and its public settings contract.
+func (r *Registry[T]) RegisterWithSchema(typ string, f Factory[T], schema Schema) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, dup := r.f[typ]; dup {
+		panic("duplicate registry type: " + typ)
+	}
+	seen := map[string]bool{}
+	for _, field := range schema.Fields {
+		if field.Key == "" || seen[field.Key] {
+			panic("invalid schema key")
+		}
+		seen[field.Key] = true
+		switch field.Type {
+		case "url", "string", "fingerprint", "bool", "duration", "list":
+		case "secret":
+			if field.Default != nil {
+				panic("secret defaults are forbidden")
+			}
+		default:
+			panic("invalid schema field type")
+		}
+	}
+	r.f[typ] = f
+	r.schemas[typ] = cloneSchema(schema)
+}
+
+func cloneSchema(s Schema) Schema {
+	b, err := json.Marshal(s)
+	if err != nil {
+		panic(err)
+	}
+	var copy Schema
+	if err := json.Unmarshal(b, &copy); err != nil {
+		panic(err)
+	}
+	return copy
+}
+
+// Schema returns an independent copy, so callers cannot mutate registration.
+func (r *Registry[T]) Schema(typ string) (Schema, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	s, ok := r.schemas[typ]
+	return cloneSchema(s), ok
 }
 
 // Register adds a factory. It panics on a duplicate type name, because that

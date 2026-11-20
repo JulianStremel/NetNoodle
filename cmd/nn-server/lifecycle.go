@@ -173,7 +173,11 @@ func exportArchive(ctx context.Context, b store.Backuper, dataDir, destination s
 	}
 	defer os.RemoveAll(temp)
 	database := filepath.Join(temp, "netnoodle.db")
-	if err := b.Backup(ctx, database); err != nil {
+	exporter, ok := b.(store.ExportBackuper)
+	if !ok {
+		return fmt.Errorf("store does not support sanitized export")
+	}
+	if err := exporter.ExportBackup(ctx, database); err != nil {
 		return err
 	}
 	files := map[string]string{"netnoodle.db": database}

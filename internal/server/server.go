@@ -20,8 +20,9 @@ import (
 
 // Server holds the HTTP handlers and their dependencies.
 type Server struct {
-	onboard  *onboardState
-	updateMu sync.Mutex
+	integrations *integrationSupervisor
+	onboard      *onboardState
+	updateMu     sync.Mutex
 	// ingestSlots bounds how many observation bodies are read at the same
 	// time (security review 2026-11-20: 60 parallel 64 MiB bodies).
 	ingestSlots chan struct{}
@@ -51,31 +52,33 @@ type Server struct {
 // New creates a server. ui is the static web UI file system.
 func New(cfg Config, st store.Store, ui fs.FS, fingerprint string, log *slog.Logger) *Server {
 	return &Server{
-		onboard:     newOnboardState(),
-		cfg:         cfg,
-		st:          st,
-		log:         log,
-		ui:          ui,
-		fingerprint: fingerprint,
-		limiter:     newLoginLimiter(),
-		enrollLim:   newLoginLimiter(),
-		bcryptSem:   make(chan struct{}, 4),
-		notifySem:   make(chan struct{}, 8),
-		peerRate:    newRateLimiter(60, 10*time.Minute),
-		actorRate:   newRateLimiter(300, 10*time.Minute),
-		ingestSlots: make(chan struct{}, maxIngestReads),
-		reserved:    reservedNames(cfg),
-		intel:       newIntelState(),
-		decide:      newDecideState(),
-		pull:        newPullState(),
-		orders:      newOrderState(),
-		now:         time.Now,
+		integrations: newIntegrationSupervisor(),
+		onboard:      newOnboardState(),
+		cfg:          cfg,
+		st:           st,
+		log:          log,
+		ui:           ui,
+		fingerprint:  fingerprint,
+		limiter:      newLoginLimiter(),
+		enrollLim:    newLoginLimiter(),
+		bcryptSem:    make(chan struct{}, 4),
+		notifySem:    make(chan struct{}, 8),
+		peerRate:     newRateLimiter(60, 10*time.Minute),
+		actorRate:    newRateLimiter(300, 10*time.Minute),
+		ingestSlots:  make(chan struct{}, maxIngestReads),
+		reserved:     reservedNames(cfg),
+		intel:        newIntelState(),
+		decide:       newDecideState(),
+		pull:         newPullState(),
+		orders:       newOrderState(),
+		now:          time.Now,
 	}
 }
 
 // Handler returns the root HTTP handler.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	s.integrationRoutes(mux)
 	mux.HandleFunc("GET /install.sh", s.handleInstallScript)
 	mux.HandleFunc("GET /install.ps1", s.handleInstallScript)
 	mux.HandleFunc("GET /v1/install/manifest", s.handleInstallManifest)
@@ -196,6 +199,9 @@ func bodyLimits(next http.Handler) http.Handler {
 		// cancels the request context, so it must be longer.
 		if r.Method == http.MethodGet && r.URL.Path == "/v1/orders" {
 			deadline = time.Minute
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/api/integrations/test" {
+			deadline = 40 * time.Second
 		}
 		_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(deadline))
 		r.Body = http.MaxBytesReader(w, r.Body, limit)

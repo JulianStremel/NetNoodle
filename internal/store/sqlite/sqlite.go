@@ -7,6 +7,7 @@ import (
 	"embed"
 	"errors"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -51,6 +52,16 @@ func openWithOptions(ctx context.Context, path string, opts migrationOptions) (*
 	// lock upgrades and keeps ":memory:" databases shared. Revisit if reads
 	// become a bottleneck.
 	db.SetMaxOpenConns(1)
+	if path != ":memory:" {
+		if err := db.PingContext(ctx); err != nil {
+			db.Close()
+			return nil, err
+		}
+		if err := os.Chmod(path, 0o600); err != nil {
+			db.Close()
+			return nil, err
+		}
+	}
 	s := &DB{db: db, path: path, backupDir: opts.backupDir}
 	if s.backupDir == "" {
 		s.backupDir = filepath.Join(filepath.Dir(path), "backups")

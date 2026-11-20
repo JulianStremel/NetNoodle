@@ -2,9 +2,11 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -15,6 +17,48 @@ import (
 )
 
 var _ store.Backuper = (*DB)(nil)
+
+// ExportBackup sanitizes only the snapshot. VACUUM removes old secret bytes
+// from freed pages as well as live records; the original database is untouched.
+func (s *DB) ExportBackup(ctx context.Context, destination string) error {
+	if err := s.Backup(ctx, destination); err != nil {
+		return err
+	}
+	db, err := sql.Open("sqlite", "file:"+(&url.URL{Path: filepath.ToSlash(destination)}).EscapedPath())
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	var exists int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE name='integrations'`).Scan(&exists); err != nil {
+		return err
+	}
+	if exists != 0 {
+		if _, err := db.ExecContext(ctx, `PRAGMA secure_delete=ON`); err != nil {
+			return err
+		}
+		if _, err := db.ExecContext(ctx, `UPDATE integrations SET secrets_json='{}',enabled=0,last_error=''`); err != nil {
+			return err
+		}
+		if _, err := db.ExecContext(ctx, `VACUUM`); err != nil {
+			return err
+		}
+	}
+	// Fold any WAL into the exported main file before the archive reads it.
+	if _, err := db.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		return err
+	}
+	if err := db.Close(); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(destination, os.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return f.Sync()
+}
 
 type migrationOptions struct {
 	fs        fs.FS

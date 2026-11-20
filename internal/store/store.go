@@ -311,6 +311,7 @@ type Intel interface {
 
 // Store is the full persistence interface.
 type Store interface {
+	Integrations
 	Onboarding
 	Users
 	Sessions

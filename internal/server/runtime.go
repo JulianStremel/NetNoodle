@@ -2,14 +2,11 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"time"
 
 	"github.com/JulianStremel/netnoodle/internal/notify"
-	"github.com/JulianStremel/netnoodle/internal/proto"
 	"github.com/JulianStremel/netnoodle/internal/registry"
-	"github.com/JulianStremel/netnoodle/internal/source"
 	"github.com/JulianStremel/netnoodle/internal/store"
 )
 
@@ -79,57 +76,10 @@ func (s *Server) emit(ctx context.Context, e notify.Event, actor, data string) {
 // SetNotifiers installs the notifiers built from the config.
 func (s *Server) SetNotifiers(ns []notify.Notifier) { s.notifiers = ns }
 
-// RunSources polls each in-process source on its interval until ctx ends.
+// RunSources starts the supervisor for config and database sources. Individual
+// constructor or poll failures are recorded without stopping other sources.
 func (s *Server) RunSources(ctx context.Context, specs []SourceSpec) error {
-	for _, spec := range specs {
-		if spec.Disabled {
-			continue
-		}
-		if spec.Name == "" {
-			spec.Name = spec.Type
-		}
-		src, err := source.Registry.Build(spec.Type, spec.Name, spec.Settings)
-		if err != nil {
-			return err
-		}
-		every := spec.Interval.Duration
-		if every <= 0 {
-			every = 10 * time.Minute
-		}
-		if every < 30*time.Second {
-			every = 30 * time.Second
-		}
-		go s.pollLoop(ctx, src, every)
-	}
-	return nil
-}
-
-func (s *Server) pollLoop(ctx context.Context, src source.Source, every time.Duration) {
-	t := time.NewTicker(every)
-	defer t.Stop()
-	for {
-		start := time.Now()
-		n := 0
-		err := src.Poll(ctx, func(obs proto.Observation) error {
-			obs.Version = proto.Version
-			obs.Source = src.Name()
-			raw, _ := json.Marshal(obs)
-			_, err := s.Ingest(ctx, obs, raw)
-			n += len(obs.Entities)
-			return err
-		})
-		if err != nil && ctx.Err() == nil {
-			s.log.Warn("source poll", "source", src.Name(), "err", err)
-			s.event(ctx, "source.error", src.Name(), err.Error())
-		} else {
-			s.log.Info("source poll", "source", src.Name(), "entities", n, "took", time.Since(start).Round(time.Millisecond))
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-		}
-	}
+	return s.startIntegrationSupervisor(ctx, specs)
 }
 
 // eventRetention is how long the event log is kept.

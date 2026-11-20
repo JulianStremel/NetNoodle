@@ -23,7 +23,14 @@ import (
 	"github.com/JulianStremel/netnoodle/internal/source"
 )
 
-func init() { source.Registry.Register("tailscale", New) }
+func init() {
+	source.Registry.RegisterWithSchema("tailscale", New, source.SettingsSchema(
+		source.Field{Key: "api_key", Label: "API key", Type: "secret", Required: true, Help: "API access token with read access to devices."},
+		source.Field{Key: "tailnet", Label: "Tailnet", Type: "string", Default: "-", Help: "Tailnet name; - uses the token's tailnet."},
+		source.Field{Key: "url", Label: "API URL", Type: "url", Default: "https://api.tailscale.com", Help: "HTTPS API address."},
+		source.Field{Key: "include_tags", Label: "Include tags", Type: "list", Help: "One tag per line. Empty selects all nodes."},
+	))
+}
 
 type Settings struct {
 	Tailnet     string   `json:"tailnet"`

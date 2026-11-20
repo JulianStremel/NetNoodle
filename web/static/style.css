@@ -248,3 +248,13 @@ tbody tr:hover { background: #141c26; }
 /* Host update notification in the sidebar footer. */
 .update-pill { display: inline-block; padding: .25rem .6rem; margin-top: .5rem; border-radius: 999px; background: #5c410c; color: #ffdc8a; font-size: .8rem; }
 .update-pill[hidden] { display: none; }
+/* Integration forms are generated from the server's settings schemas. */
+.integration-list { margin-top: 1.5rem; }
+.integration-editor { max-width: 48rem; margin-top: 1.5rem; }
+.integration-fields { display: grid; gap: .75rem; margin-bottom: 1rem; }
+.integration-fields label { display: grid; gap: .35rem; }
+.integration-fields input[type="checkbox"] { justify-self: start; }
+.integration-fields textarea { min-height: 5rem; width: 100%; font: inherit; }
+.integration-certificate { padding: 1rem; margin: 1rem 0; border: 1px solid var(--line); }
+.integration-certificate code { overflow-wrap: anywhere; }
+.integration-actions { display: flex; flex-wrap: wrap; gap: .5rem; }

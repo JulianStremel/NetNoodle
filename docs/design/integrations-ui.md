@@ -1,10 +1,25 @@
 # Integrations in the web interface
 
-Status: design (2026-11-20). User request: "make the setup a UI option" (UniFi first, generic for all sources).
+Status: implemented (first version). User request: "make the setup a UI option" (UniFi first, generic for all sources).
 
 ## 1. Goal
 
 An operator adds, changes, tests and removes integrations (in-process sources: `unifi`, `proxmox`, `tailscale`, `homeassistant`; later the MQTT publisher) on the **Integrations** page. No config file edit and no server restart. Sources in the config file keep working; they show as "from config file" (read only).
+
+## 1a. Scope (user decision 2026-11-20)
+
+**Every integration that lives in the server is configurable in the web interface**, not only sources. Each plug-in registry gets the same mechanism (schema, write-only secrets, probe/test where it makes sense, supervisor or hot reload):
+
+| Registry | Plug-ins today | Test action |
+|---|---|---|
+| `source` | unifi, proxmox, tailscale, homeassistant | one poll without ingest |
+| `notify` | webhook, mqtt (Home Assistant), later Home Assistant notifications and Telegram | send a test event |
+| `intel` matchers and enrichers | osv, msrc, kev, epss (URL, cache, limits) | one refresh without saving |
+| `llm` (M7 advisor, provider-agnostic) | none yet: OpenAI-compatible, Anthropic, local (Ollama/OpenAI-compatible); fields provider, base URL, model, API key (secret), timeout, data minimization options | one minimal prompt |
+
+Deciders and guards are policy, not integrations; they stay in the config file (guards protected/scope/killswitch are mandatory anyway). The page groups the registries in tabs: Sources, Notifications, Threat intelligence, AI advisor. The LLM tab is shown when the LLM registry has at least one provider (M7).
+
+Implementation order: sources first (the generic mechanism), then notify, intel, llm in a second step that reuses the same table (`integrations.kind` = registry name).
 
 ## 2. Generic settings schema (registry)
 
@@ -15,7 +30,7 @@ An operator adds, changes, tests and removes integrations (in-process sources: `
 
 ## 3. Storage and lifecycle
 
-- Table `integrations(id, type, name UNIQUE, settings_json, secrets_json, enabled, created_at, updated_at, last_ok_at, last_error)` (migration after the onboarding one).
+- Table `integrations(id, kind, type, name UNIQUE, settings_json, secrets_json, enabled, created_at, updated_at, last_ok_at, last_error)` (migration after the onboarding one).
 - Secrets are stored in the database (data directory is 0700, database 0600) and are excluded from `nn-server export`; documented as an accepted risk (same disk as the order key).
 - A source supervisor in the server starts, stops and restarts sources when a row changes (context per source). Config-file sources are started as before.
 - Validation: the same constructor (`New`) validates; a failed `New` is shown to the user, nothing is saved.

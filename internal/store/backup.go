@@ -7,3 +7,9 @@ import "context"
 type Backuper interface {
 	Backup(context.Context, string) error
 }
+
+// ExportBackuper writes a portable snapshot with integration credentials removed.
+// Local recovery backups retain credentials.
+type ExportBackuper interface {
+	ExportBackup(context.Context, string) error
+}

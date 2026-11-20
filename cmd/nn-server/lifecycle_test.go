@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -13,7 +14,9 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/JulianStremel/netnoodle/internal/store"
 	"github.com/JulianStremel/netnoodle/internal/store/sqlite"
 )
 
@@ -93,6 +96,26 @@ func TestExportContentsAndSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
+	now := time.Now().UTC()
+	credential := "export-must-never-include-this-api-key"
+	integration, err := st.CreateIntegration(ctx, store.Integration{Type: "unifi", Name: "export-source", Settings: json.RawMessage(`{"url":"https://controller"}`), Secrets: json.RawMessage(`{"api_key":"` + credential + `"}`), Enabled: true, CreatedAt: now, UpdatedAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Local recovery backups still contain usable credentials.
+	localBackup := filepath.Join(t.TempDir(), "local.db")
+	if err := st.Backup(ctx, localBackup); err != nil {
+		t.Fatal(err)
+	}
+	local, err := sqlite.OpenReadOnly(ctx, localBackup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	localIntegration, err := local.GetIntegration(ctx, integration.ID)
+	local.Close()
+	if err != nil || !bytes.Contains(localIntegration.Secrets, []byte(credential)) {
+		t.Fatal("local backup lost credentials", err)
+	}
 	if _, err := st.CreateUser(ctx, "exported", []byte("hash")); err != nil {
 		t.Fatal(err)
 	}
@@ -144,6 +167,9 @@ func TestExportContentsAndSecrets(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		if bytes.Contains(data, []byte(credential)) {
+			t.Fatalf("credential bytes in exported %s", h.Name)
+		}
 		if h.Name == "manifest.json" {
 			if err := json.Unmarshal(data, &manifest); err != nil {
 				t.Fatal(err)
@@ -159,11 +185,19 @@ func TestExportContentsAndSecrets(t *testing.T) {
 				t.Fatal(err)
 			}
 			u, err := snapshot.UserByName(ctx, "exported")
+			exportedIntegration, integrationErr := snapshot.GetIntegration(ctx, integration.ID)
 			snapshot.Close()
 			if err != nil || u.Name != "exported" {
 				t.Fatal(u, err)
 			}
+			if integrationErr != nil || string(exportedIntegration.Secrets) != "{}" || exportedIntegration.Enabled {
+				t.Fatal("exported integration retains credentials or is enabled", integrationErr)
+			}
 		}
+	}
+	original, err := st.GetIntegration(ctx, integration.ID)
+	if err != nil || !original.Enabled || !bytes.Contains(original.Secrets, []byte(credential)) {
+		t.Fatal("export changed original integration", err)
 	}
 	want := []string{"netnoodle.db", "manifest.json", "tls/cert.pem", "tls/key.pem", "tls/pull-client-cert.pem", "tls/pull-client-key.pem", "keys/order-ed25519.pem"}
 	sort.Strings(names)

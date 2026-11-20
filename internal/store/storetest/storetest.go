@@ -16,6 +16,7 @@ func Run(t *testing.T, open func(t *testing.T) store.Store) {
 		name string
 		run  func(*testing.T, func(*testing.T) store.Store)
 	}{
+		{"Integrations", testIntegrations},
 		{"Onboarding", testOnboarding},
 		{"PeerVersion", testPeerVersion},
 		{"RevertsOnlyDelivery", testRevertsOnlyDelivery},

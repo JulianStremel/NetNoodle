@@ -21,3 +21,12 @@ type Source interface {
 
 // Registry holds all source types. Implementations register in init().
 var Registry = registry.New[Source]("source")
+
+type Field = registry.Field
+type Schema = registry.Schema
+
+// SettingsSchema adds the runtime's common poll interval to source settings.
+// The runtime removes interval before passing settings to the constructor.
+func SettingsSchema(fields ...Field) Schema {
+	return Schema{Fields: append(fields, Field{Key: "interval", Label: "Poll interval", Type: "duration", Default: "10m", Help: "Time between polls (at least 30s)."})}
+}
