@@ -91,6 +91,17 @@ func (s *Server) ingestAs(ctx context.Context, obs proto.Observation, raw []byte
 	for _, m := range res.Merged {
 		s.event(ctx, "device.merged", obs.Source, fmt.Sprintf("device #%d merged into #%d", m[1], m[0]))
 	}
+	for _, m := range res.MergeRefused {
+		data, _ := json.Marshal(map[string]any{"kept": m[0], "other": m[1], "source": obs.Source})
+		s.emit(ctx, notify.Event{
+			Type:     "device.merge_refused",
+			Severity: "warning",
+			Title:    fmt.Sprintf("%s reports devices #%d and #%d as one device", obs.Source, m[0], m[1]),
+			Detail:   "They were not merged because one of them is described by an agent or has tags. If the source data is wrong, a device may report identifiers that are not its own.",
+			Link:     "#/devices/" + strconv.FormatInt(m[0], 10),
+			Fields:   map[string]string{"source": obs.Source},
+		}, obs.Source, string(data))
+	}
 	if hasComponents(obs.Entities) || len(res.Merged) > 0 {
 		s.enqueueMatch(res.Devices...)
 	}

@@ -50,6 +50,8 @@ type Tx interface {
 	PutIdentifier(deviceID int64, id proto.Identifier, source string, at time.Time) error
 	// Merge moves everything from drop to keep and deletes drop.
 	Merge(keep, drop int64) error
+	// Tags returns the operator tags of a device.
+	Tags(deviceID int64) ([]string, error)
 	// PutComponents and PutServices upsert rows of one source. If complete
 	// is true, rows of that source that are not in the list are removed.
 	PutComponents(deviceID int64, source string, comps []proto.Component, complete bool, at time.Time) error
@@ -78,7 +80,11 @@ type Result struct {
 	Devices []int64     `json:"devices"` // all devices touched, in order
 	New     []NewDevice `json:"new,omitempty"`
 	Merged  [][2]int64  `json:"merged,omitempty"` // [keep, drop]
-	Skipped int         `json:"skipped,omitempty"`
+	// MergeRefused are device pairs [kept, other] that a source report
+	// connected, but that were not merged because one of them is
+	// agent-owned or has operator tags (security review 2026-11-20).
+	MergeRefused [][2]int64 `json:"merge_refused,omitempty"`
+	Skipped      int        `json:"skipped,omitempty"`
 	// Claimed are existing devices that an agent report took over (first
 	// report of an agent, or a container that matched a guest by MAC).
 	Claimed []int64 `json:"claimed,omitempty"`
@@ -127,6 +133,9 @@ type resolver struct {
 	obs   *proto.Observation
 	res   *Result
 	agent string // agent peer name; "" for sources
+	// keepIDs is set while an entity whose merge was refused is applied:
+	// its identifiers that another device holds stay with that device.
+	keepIDs bool
 }
 
 func (r *resolver) apply(e *proto.Entity, parentID int64) (int64, error) {
@@ -152,6 +161,7 @@ func (r *resolver) apply(e *proto.Entity, parentID int64) (int64, error) {
 	case r.agent != "":
 		dev, err = r.resolveAgent(e)
 	default:
+		r.keepIDs = false
 		dev, err = r.resolve(e)
 	}
 	if err != nil {
@@ -181,6 +191,15 @@ func (r *resolver) apply(e *proto.Entity, parentID int64) (int64, error) {
 	}
 
 	for _, id := range e.Identifiers {
+		if r.keepIDs {
+			owner, ok, err := tx.Lookup(id.Kind, id.Value)
+			if err != nil {
+				return 0, err
+			}
+			if ok && owner != dev {
+				continue
+			}
+		}
 		if r.agent != "" && !movableByAgent[id.Kind] {
 			// An agent must not take an identifier (whatever strength it
 			// claims) from another device. Only IP addresses and host
@@ -246,6 +265,26 @@ func (r *resolver) resolve(e *proto.Entity) (int64, error) {
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 	keep := ids[0]
+	// Source data can contain values that a device controls (for example
+	// the MACs that an IoT device reports to Home Assistant). A source must
+	// not merge devices that an agent describes or that an operator tagged:
+	// a merge moves identifiers, tags and pending decisions.
+	for _, d := range ids {
+		locked, err := r.mergeLocked(d)
+		if err != nil {
+			return 0, err
+		}
+		if locked {
+			keep = r.primary(e, ids)
+			for _, other := range ids {
+				if other != keep {
+					r.res.MergeRefused = append(r.res.MergeRefused, [2]int64{keep, other})
+				}
+			}
+			r.keepIDs = true
+			return keep, nil
+		}
+	}
 	for _, drop := range ids[1:] {
 		if err := r.tx.Merge(keep, drop); err != nil {
 			return 0, err
@@ -253,6 +292,37 @@ func (r *resolver) resolve(e *proto.Entity) (int64, error) {
 		r.res.Merged = append(r.res.Merged, [2]int64{keep, drop})
 	}
 	return keep, nil
+}
+
+// mergeLocked reports whether a source may not merge device dev with
+// another device: an agent owns it, or an operator tagged it.
+func (r *resolver) mergeLocked(dev int64) (bool, error) {
+	ids, err := r.tx.Identifiers(dev)
+	if err != nil {
+		return false, err
+	}
+	for _, id := range ids {
+		if id.Kind == AgentKind || id.Kind == ChildKind {
+			return true, nil
+		}
+	}
+	tags, err := r.tx.Tags(dev)
+	return len(tags) > 0, err
+}
+
+// primary selects the device for an entity whose merge was refused: the
+// device that holds the entity's first strong identifier that is not a
+// MAC address (a source-specific ID), else the oldest device.
+func (r *resolver) primary(e *proto.Entity, ids []int64) int64 {
+	for _, id := range e.Identifiers {
+		if id.Strength != proto.Strong || id.Kind == "mac" {
+			continue
+		}
+		if dev, ok, err := r.tx.Lookup(id.Kind, id.Value); err == nil && ok {
+			return dev
+		}
+	}
+	return ids[0]
 }
 
 // weakOrder is the order in which weak identifier kinds are tried.

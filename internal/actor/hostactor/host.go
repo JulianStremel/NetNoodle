@@ -25,8 +25,9 @@ var tableName = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
 var serviceName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.@:\\-]*\.service$`)
 
 // Settings bind this backend to this host's agent peer name. Empty Services
-// refuses both service actions. NeverBlockPorts defaults to [22, 7444] only when
-// omitted; an explicit empty array permits every otherwise valid port.
+// refuses both service actions. NeverBlockPorts defaults to [22, 7443, 7444]
+// (SSH, server, pull agent). An explicit empty array is refused unless
+// AllowEmptyNeverBlockPorts is set (security review 2026-11-20).
 type Settings struct {
 	Agent           string   `json:"agent"`
 	NFT             string   `json:"nft"`
@@ -35,6 +36,8 @@ type Settings struct {
 	NeverBlockPorts []int    `json:"never_block_ports"`
 	Services        []string `json:"services"`
 	Systemctl       string   `json:"systemctl"`
+	// AllowEmptyNeverBlockPorts permits never_block_ports: [] (no protected port).
+	AllowEmptyNeverBlockPorts bool `json:"allow_empty_never_block_ports"`
 }
 
 // Runner executes one program directly, without a shell. Implementations must
@@ -65,7 +68,7 @@ func New(name string, raw json.RawMessage) (actor.Backend, error) {
 // NewWithRunner supports testing command planning without host privileges.
 // Execute still refuses every order on non-Linux platforms.
 func NewWithRunner(name string, raw json.RawMessage, runner Runner) (*Backend, error) {
-	s := Settings{NFT: "/usr/sbin/nft", Table: "netnoodle", MaxTTL: "24h", Systemctl: "/usr/bin/systemctl", NeverBlockPorts: []int{22, 7444}}
+	s := Settings{NFT: "/usr/sbin/nft", Table: "netnoodle", MaxTTL: "24h", Systemctl: "/usr/bin/systemctl", NeverBlockPorts: []int{22, 7443, 7444}}
 	if !json.Valid(raw) || registry.Decode(raw, &s) != nil || strings.TrimSpace(s.Agent) == "" || strings.ContainsAny(s.Agent, "\x00\r\n") {
 		return nil, errors.New("host: invalid settings (agent is required; malformed JSON or unknown fields refused)")
 	}
@@ -89,6 +92,9 @@ func NewWithRunner(name string, raw json.RawMessage, runner Runner) (*Backend, e
 	ttl, err := time.ParseDuration(s.MaxTTL)
 	if err != nil || ttl < time.Second {
 		return nil, errors.New("host: max_ttl must be a duration of at least one second")
+	}
+	if len(s.NeverBlockPorts) == 0 && !s.AllowEmptyNeverBlockPorts {
+		return nil, errors.New("host: never_block_ports must protect management ports (SSH, server); explicitly set allow_empty_never_block_ports to override")
 	}
 	protected := make(map[int]bool, len(s.NeverBlockPorts))
 	for _, port := range s.NeverBlockPorts {

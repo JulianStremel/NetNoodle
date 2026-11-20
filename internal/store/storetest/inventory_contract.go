@@ -84,16 +84,17 @@ func testWeakMatchThenStrong(t *testing.T, open func(t *testing.T) store.Store) 
 }
 
 func testStrongCollisionMerges(t *testing.T, open func(t *testing.T) store.Store) {
+	testAgentOwnedNotMerged(t, open)
 	db := open(t)
 	a := ingest(t, db, "scan", t0, false, proto.Entity{Identifiers: []proto.Identifier{strong("mac", "00:1a:2b:00:00:01")},
 		Services: []proto.Service{{Port: 22, Proto: "tcp", Product: "openssh"}}})
-	b := ingest(t, db, "agent:web1", t0, true, proto.Entity{Kind: proto.KindHost, Name: "web1", Identifiers: []proto.Identifier{strong("agent", "web1")},
+	b := ingest(t, db, "agent:web1", t0, true, proto.Entity{Kind: proto.KindHost, Name: "web1", Identifiers: []proto.Identifier{strong("serial", "web1")},
 		Components: []proto.Component{{PURL: "pkg:deb/debian/nginx@1.22.1", Name: "nginx", Version: "1.22.1"}}})
 	if deviceCount(t, db) != 2 {
 		t.Fatal("want 2 devices before merge")
 	}
 	// The agent reports its interfaces: now one entity has both strong ids.
-	m := ingest(t, db, "agent:web1", t0.Add(time.Minute), true, proto.Entity{Kind: proto.KindHost, Identifiers: []proto.Identifier{strong("agent", "web1")},
+	m := ingest(t, db, "agent:web1", t0.Add(time.Minute), true, proto.Entity{Kind: proto.KindHost, Identifiers: []proto.Identifier{strong("serial", "web1")},
 		Interfaces: []proto.Interface{{Name: "eth0", MAC: "00:1a:2b:00:00:01", IPs: []string{"10.0.0.5"}}},
 		Components: []proto.Component{{PURL: "pkg:deb/debian/nginx@1.22.1", Name: "nginx", Version: "1.22.1"}}})
 	if len(m.Merged) != 1 || deviceCount(t, db) != 1 {
@@ -185,5 +186,18 @@ func testSkipsEntitiesWithoutIdentifiers(t *testing.T, open func(t *testing.T) s
 		proto.Entity{Identifiers: []proto.Identifier{strong("mac", "ff:ff:ff:ff:ff:ff")}})
 	if r.Skipped != 2 || deviceCount(t, db) != 0 {
 		t.Fatalf("r=%+v", r)
+	}
+}
+
+// testAgentOwnedNotMerged: a source entity that connects an agent-owned
+// device with another device does not merge them (security review
+// 2026-11-20: source data can contain values that a device controls).
+func testAgentOwnedNotMerged(t *testing.T, open func(t *testing.T) store.Store) {
+	db := open(t)
+	ingest(t, db, "scan", t0, false, proto.Entity{Identifiers: []proto.Identifier{strong("mac", "00:1a:2b:00:00:71")}})
+	ingest(t, db, "agent:nas", t0, true, proto.Entity{Kind: proto.KindHost, Identifiers: []proto.Identifier{strong("agent", "nas")}})
+	r := ingest(t, db, "homeassistant", t0.Add(time.Minute), false, proto.Entity{Identifiers: []proto.Identifier{strong("homeassistant.device", "ha/x"), strong("mac", "00:1a:2b:00:00:71"), strong("agent", "nas")}})
+	if len(r.Merged) != 0 || len(r.MergeRefused) != 1 || deviceCount(t, db) != 2 {
+		t.Fatalf("agent-owned device merged: %+v devices=%d", r, deviceCount(t, db))
 	}
 }

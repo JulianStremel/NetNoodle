@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 	"sync"
@@ -139,7 +140,7 @@ func (s *Server) evaluateSituation(ctx context.Context, ds []decide.Decider, gs 
 				}
 			}
 		}
-		ports, kept := blockablePorts(values)
+		ports, kept := blockablePorts(values, s.managementPorts())
 		keptOpen = kept
 		if p.Params == nil {
 			p.Params = map[string]any{}
@@ -285,8 +286,22 @@ func findingSituation(d store.DeviceDetail, f store.FindingRow, n GraphNode) dec
 	return decide.Situation{Device: device, Component: f.PURL, Confidence: f.Confidence, Networks: n.Networks, RelatedRisk: n.RelatedRisk, Vuln: intel.Vuln{ID: f.VulnID, Aliases: f.Aliases, Summary: f.Summary, Score: f.Score, Vector: f.Vector, KEV: f.KEV, EPSS: f.EPSS, EPSSPct: f.EPSSPct, Facts: f.Facts}}
 }
 
+// managementPorts are never blocked: SSH, the default server port, the
+// pull agent port and the configured listen port of this server
+// (security review 2026-11-20: a block of the server port would also cut
+// off the actor that must revert the block).
+func (s *Server) managementPorts() map[int]bool {
+	m := map[int]bool{22: true, 7443: true, 7444: true}
+	if _, port, err := net.SplitHostPort(s.cfg.Listen); err == nil {
+		if n, err := strconv.Atoi(port); err == nil && n > 0 && n < 65536 {
+			m[n] = true
+		}
+	}
+	return m
+}
+
 // Keep management ports reachable and send only bounded, canonical actor input.
-func blockablePorts(values []string) (ports, kept []string) {
+func blockablePorts(values []string, mgmt map[int]bool) (ports, kept []string) {
 	ports, kept = []string{}, []string{}
 	seen := map[string]bool{}
 	for _, value := range values {
@@ -296,7 +311,7 @@ func blockablePorts(values []string) (ports, kept []string) {
 			continue
 		}
 		seen[value] = true
-		if n == 22 || n == 7444 {
+		if mgmt[n] {
 			kept = append(kept, value)
 			continue
 		}

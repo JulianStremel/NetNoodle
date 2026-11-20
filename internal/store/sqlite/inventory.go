@@ -56,6 +56,23 @@ func (t *invTx) Lookup(kind, value string) (int64, bool, error) {
 	return id, err == nil, err
 }
 
+func (t *invTx) Tags(deviceID int64) ([]string, error) {
+	rows, err := t.tx.QueryContext(t.ctx, `SELECT tag FROM device_tags WHERE device_id = ? ORDER BY tag`, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var tag string
+		if err := rows.Scan(&tag); err != nil {
+			return nil, err
+		}
+		out = append(out, tag)
+	}
+	return out, rows.Err()
+}
+
 func (t *invTx) Identifiers(deviceID int64) ([]proto.Identifier, error) {
 	rows, err := t.tx.QueryContext(t.ctx, `SELECT kind, value, strength FROM device_ids WHERE device_id = ?`, deviceID)
 	if err != nil {

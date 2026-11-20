@@ -247,7 +247,10 @@ func TestLocalRefusalsMakeNoCommands(t *testing.T) {
 func TestExplicitEmptyProtection(t *testing.T) {
 	f := newFake(t)
 	f.sets["blocked_tcp"] = setFixture("tcp", elementFixture(22, 3600))
-	b := build(t, `{"agent":"web01","never_block_ports":[]}`, f)
+	if _, err := NewWithRunner("host", json.RawMessage(`{"agent":"web01","never_block_ports":[]}`), f); err == nil {
+		t.Fatal("empty never_block_ports accepted without allow_empty_never_block_ports")
+	}
+	b := build(t, `{"agent":"web01","never_block_ports":[],"allow_empty_never_block_ports":true}`, f)
 	o := order("block-port")
 	o.Params["ports"] = []string{"22/tcp"}
 	if _, err := b.execute(context.Background(), o); err != nil {

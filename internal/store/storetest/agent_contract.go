@@ -141,6 +141,7 @@ func testAgentMaxHostChildren(t *testing.T, open func(*testing.T) store.Store) {
 }
 
 func testResolverMergeMovesTagsProposalsOrders(t *testing.T, open func(*testing.T) store.Store) {
+	testUntaggedSourceMerge(t, open)
 	st, ctx, now := open(t), context.Background(), time.Now().UTC()
 	keepID := strong("mac", "00:11:22:33:44:55")
 	keep := ingest(t, st, "scan", now, false, proto.Entity{Identifiers: []proto.Identifier{keepID}}).Devices[0]
@@ -152,10 +153,17 @@ func testResolverMergeMovesTagsProposalsOrders(t *testing.T, open func(*testing.
 	must(t, st.QueueOrder(ctx, o))
 	must(t, st.SetTags(ctx, keep, []string{"lan", "protected"}))
 	must(t, st.SetTags(ctx, drop, []string{"lan", "auto"}))
+	// A source must not merge tagged devices (security review 2026-11-20):
+	// the identifiers stay where they are and the refusal is reported.
 	result := ingest(t, st, "scan", now.Add(time.Minute), false, proto.Entity{Identifiers: []proto.Identifier{keepID, strong("serial", "drop")}})
-	if !reflect.DeepEqual(result.Merged, [][2]int64{{keep, drop}}) {
+	if len(result.Merged) != 0 || len(result.MergeRefused) != 1 {
 		t.Fatal(result)
 	}
+	if lookup(t, st, "serial", "drop") != drop || lookup(t, st, "mac", "00:11:22:33:44:55") != keep {
+		t.Fatal("refused merge moved identifiers")
+	}
+	// The merge itself (operator decision) keeps every tag and the order history.
+	must(t, st.InventoryTx(ctx, func(tx inventory.Tx) error { return tx.Merge(keep, drop) }))
 	if _, err := st.GetDevice(ctx, drop); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("merged device still exists: %v", err)
 	}
@@ -228,5 +236,17 @@ func testResolverIdentifierProvenance(t *testing.T, open func(*testing.T) store.
 		if identifier.Kind == "mac" && (!identifier.FirstSeen.Equal(now) || !identifier.LastSeen.Equal(now.Add(2*time.Minute))) {
 			t.Fatal(identifier)
 		}
+	}
+}
+
+// testUntaggedSourceMerge: devices without tags or agent are still merged
+// by a source whose entity holds strong identifiers of both.
+func testUntaggedSourceMerge(t *testing.T, open func(*testing.T) store.Store) {
+	st, now := open(t), time.Now().UTC()
+	a := ingest(t, st, "scan", now, false, proto.Entity{Identifiers: []proto.Identifier{strong("mac", "00:11:22:33:44:01")}}).Devices[0]
+	b := ingest(t, st, "unifi", now, false, proto.Entity{Identifiers: []proto.Identifier{strong("unifi.client", "c1")}}).Devices[0]
+	r := ingest(t, st, "unifi", now.Add(time.Minute), false, proto.Entity{Identifiers: []proto.Identifier{strong("unifi.client", "c1"), strong("mac", "00:11:22:33:44:01")}})
+	if len(r.Merged) != 1 || len(r.MergeRefused) != 0 || r.Devices[0] != min(a, b) {
+		t.Fatal(r)
 	}
 }
