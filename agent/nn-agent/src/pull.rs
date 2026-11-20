@@ -17,6 +17,9 @@ use std::time::{Duration, Instant, SystemTime};
 
 const MAX_HEAD: usize = 8 * 1024;
 const READ_TIMEOUT: Duration = Duration::from_secs(10);
+/// A client must finish the TLS handshake within this time. The listener
+/// serves one connection at a time, so a short limit keeps it available.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(3);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(120);
 const REPORT_INTERVAL: Duration = Duration::from_secs(10);
 
@@ -28,6 +31,59 @@ struct State {
     key: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     code: Option<String>,
+    /// Addresses or networks (CIDR) that may connect. Empty: all. The
+    /// check runs before TLS, so other hosts cannot occupy the listener.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    allow: Vec<String>,
+}
+
+/// Parses an address or a CIDR network.
+fn parse_net(s: &str) -> Result<(std::net::IpAddr, u8), String> {
+    let (addr, bits) = match s.split_once('/') {
+        Some((a, b)) => (a, Some(b)),
+        None => (s, None),
+    };
+    let ip: std::net::IpAddr = addr
+        .trim()
+        .parse()
+        .map_err(|_| format!("{s:?} is not an IP address or CIDR network"))?;
+    let max = if ip.is_ipv4() { 32 } else { 128 };
+    let bits = match bits {
+        Some(b) => b
+            .trim()
+            .parse::<u8>()
+            .ok()
+            .filter(|b| *b <= max)
+            .ok_or_else(|| format!("{s:?}: bad prefix length"))?,
+        None => max,
+    };
+    Ok((ip, bits))
+}
+
+fn in_net(ip: std::net::IpAddr, net: (std::net::IpAddr, u8)) -> bool {
+    use std::net::IpAddr;
+    let ip = match ip {
+        IpAddr::V6(v6) => v6
+            .to_ipv4_mapped()
+            .map(IpAddr::V4)
+            .unwrap_or(IpAddr::V6(v6)),
+        v4 => v4,
+    };
+    let (a, b, len) = match (ip, net.0) {
+        (IpAddr::V4(x), IpAddr::V4(y)) => (u32::from(x) as u128, u32::from(y) as u128, 32),
+        (IpAddr::V6(x), IpAddr::V6(y)) => (u128::from(x), u128::from(y), 128),
+        _ => return false,
+    };
+    let bits = u32::from(net.1);
+    if bits == 0 {
+        return true;
+    }
+    let shift = len - bits;
+    (a >> shift) == (b >> shift)
+}
+
+fn allowed(list: &[(std::net::IpAddr, u8)], ip: std::net::IpAddr) -> bool {
+    list.is_empty() || list.iter().any(|n| in_net(ip, *n))
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -132,6 +188,31 @@ pub fn pair(
     new_key: bool,
     hostname: &str,
 ) -> Result<(), String> {
+    pair_allow(
+        path,
+        code,
+        server_fingerprint,
+        listen,
+        new_key,
+        hostname,
+        &[],
+    )
+}
+
+/// Like pair, and permits connections only from the given addresses or
+/// networks (empty: all).
+pub fn pair_allow(
+    path: &Path,
+    code: &str,
+    server_fingerprint: &str,
+    listen: &str,
+    new_key: bool,
+    hostname: &str,
+    allow: &[String],
+) -> Result<(), String> {
+    for a in allow {
+        parse_net(a)?;
+    }
     let code = code.trim();
     if code.is_empty() || code.chars().count() > 128 {
         return Err("pairing code must contain 1 to 128 characters".into());
@@ -154,6 +235,7 @@ pub fn pair(
         cert,
         key,
         code: Some(code.into()),
+        allow: allow.to_vec(),
     };
     state.save(path)?;
     println!("state: {}", path.display());
@@ -426,6 +508,11 @@ fn serve_on(
     stop: Option<&AtomicBool>,
 ) -> Result<(), String> {
     let tls = tls_config(&state)?;
+    let allow = state
+        .allow
+        .iter()
+        .map(|a| parse_net(a))
+        .collect::<Result<Vec<_>, _>>()?;
     let mut server = Server {
         cfg,
         collectors,
@@ -439,7 +526,11 @@ fn serve_on(
         .map_err(|e| e.to_string())?;
     while !stop.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
         let socket = match listener.accept() {
-            Ok((socket, _)) => socket,
+            Ok((socket, peer)) if allowed(&allow, peer.ip()) => socket,
+            Ok((_, peer)) => {
+                eprintln!("nn-agent: connection from {peer} refused (not in allow list)");
+                continue;
+            }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                 std::thread::sleep(Duration::from_millis(10));
                 continue;
@@ -462,7 +553,7 @@ fn serve_on(
             let conn = rustls::ServerConnection::new(tls.clone()).map_err(|e| e.to_string())?;
             let socket = DeadlineStream {
                 socket,
-                deadline: Instant::now() + READ_TIMEOUT,
+                deadline: Instant::now() + HANDSHAKE_TIMEOUT,
             };
             let mut stream = rustls::StreamOwned::new(conn, socket);
             while stream.conn.is_handshaking() {
@@ -543,6 +634,32 @@ mod tests {
             cert,
             key,
             code: Some(CODE.into()),
+            allow: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn allow_list() {
+        let list: Vec<_> = ["10.1.2.0/24", "fd00::1"]
+            .iter()
+            .map(|s| parse_net(s).unwrap())
+            .collect();
+        for (ip, want) in [
+            ("10.1.2.3", true),
+            ("10.1.3.3", false),
+            ("::ffff:10.1.2.9", true),
+            ("fd00::1", true),
+            ("fd00::2", false),
+        ] {
+            assert_eq!(allowed(&list, ip.parse().unwrap()), want, "{ip}");
+        }
+        assert!(allowed(&[], "192.0.2.1".parse().unwrap()));
+        assert!(allowed(
+            &[parse_net("0.0.0.0/0").unwrap()],
+            "192.0.2.1".parse().unwrap()
+        ));
+        for bad in ["10.1.2.0/33", "x", "10.1.2.0/"] {
+            assert!(parse_net(bad).is_err(), "{bad}");
         }
     }
 

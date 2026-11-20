@@ -42,6 +42,10 @@ enum Cmd {
         /// Replace the existing agent key and certificate.
         #[arg(long)]
         new_key: bool,
+        /// Accept connections only from this address or network (CIDR),
+        /// for example the server address. Repeat for more. Default: all.
+        #[arg(long = "allow-from")]
+        allow_from: Vec<String>,
     },
     /// Listen for report requests from the pinned server.
     Serve,
@@ -132,13 +136,15 @@ fn run(cli: Cli) -> Result<(), String> {
             server_fingerprint,
             listen,
             new_key,
-        } => pull::pair(
+            allow_from,
+        } => pull::pair_allow(
             &cfg.pull_state(),
             &code,
             &server_fingerprint,
             &listen,
             new_key,
             &hostname(),
+            &allow_from,
         ),
         Cmd::Serve => pull::serve(&cfg, &enabled(&cfg)?, &hostname()),
         Cmd::Enroll {

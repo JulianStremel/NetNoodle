@@ -245,6 +245,7 @@ In pull mode, the agent listens on one port. It accepts only the pull certificat
    ```
 
    The code is valid for 24 hours and only one time. Give the code in the environment variable `NN_PAIR_CODE`, so that other users cannot see it in the process list.
+   Add `--allow-from <server address>` (an address or a CIDR network, repeat for more). Then the agent closes all other connections before TLS starts, and other hosts cannot keep the agent busy.
 4. Install and start the service:
 
    ```sh
@@ -259,7 +260,8 @@ In pull mode, the agent listens on one port. It accepts only the pull certificat
 
 If you install the agent again (new key), click **New pairing code** and do step 3 again.
 
-On Windows, do the same steps with `nn-agent.exe`. Make a scheduled task that starts `nn-agent.exe serve` when the computer starts, and a firewall rule that permits the agent port only from the server address:
+On Windows, do the same steps with `nn-agent.exe`. Do step 2 of [Procedure: install the agent on Windows](#procedure-install-the-agent-on-windows) first: it restricts the permissions of `C:\ProgramData
+etnoodlegent`. The state file `pull.json` in it contains the private key of the agent. Make a scheduled task that starts `nn-agent.exe serve` when the computer starts, and a firewall rule that permits the agent port only from the server address:
 
 ```powershell
 New-NetFirewallRule -DisplayName "netnoodle agent" -Direction Inbound -Protocol TCP -LocalPort 7444 -RemoteAddress <server address> -Action Allow
