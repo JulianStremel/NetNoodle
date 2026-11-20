@@ -174,3 +174,89 @@ func TestSmallBodyLimitOnLogin(t *testing.T) {
 		t.Fatalf("100 KiB login body = %d, want 400", res.StatusCode)
 	}
 }
+
+func TestAgentContainerChildren(t *testing.T) {
+	ts, c, pw := newTestServer(t)
+	post(t, c, ts.URL+"/api/login", "application/json", `{"user":"admin","password":"`+pw+`"}`)
+	anon := &http.Client{Transport: ts.Client().Transport}
+	pve1 := enrollPeer(t, c, anon, ts.URL, "agent", "pve1")
+	pve2 := enrollPeer(t, c, anon, ts.URL, "agent", "pve2")
+	src := enrollPeer(t, c, anon, ts.URL, "source", "proxmox")
+	obs := func(entity string) string {
+		return `{"version":"v1","source":"x","observed_at":"2026-11-20T10:00:00Z","entities":[` + entity + `]}`
+	}
+	send := func(tok, body string) int { return doJSON(t, anon, "POST", ts.URL+"/v1/observations", tok, body, nil) }
+	byName := func() map[string]devRow {
+		m := map[string]devRow{}
+		for _, d := range devices(t, c, ts.URL) {
+			m[d.Name] = d
+		}
+		return m
+	}
+
+	// Host agents, then the Proxmox import puts guest "ct101" (MAC ...:01) under pve1
+	// and "ct201" (MAC ...:02) under pve2.
+	send(pve1, obs(`{"kind":"host","name":"pve1","identifiers":[{"kind":"mac","value":"00:1a:2b:00:10:01","strength":"strong"}]}`))
+	send(pve2, obs(`{"kind":"host","name":"pve2","identifiers":[{"kind":"mac","value":"00:1a:2b:00:20:01","strength":"strong"}]}`))
+	send(src, obs(`{"kind":"host","name":"pve1","identifiers":[{"kind":"mac","value":"00:1a:2b:00:10:01","strength":"strong"}],
+		"children":[{"kind":"container","name":"ct101","identifiers":[{"kind":"mac","value":"bc:24:11:00:00:01","strength":"strong"}]}]}`))
+	send(src, obs(`{"kind":"host","name":"pve2","identifiers":[{"kind":"mac","value":"00:1a:2b:00:20:01","strength":"strong"}],
+		"children":[{"kind":"container","name":"ct201","identifiers":[{"kind":"mac","value":"bc:24:11:00:00:02","strength":"strong"}]}]}`))
+	before := len(devices(t, c, ts.URL))
+
+	// pve1 reports its container with packages: it claims ct101 (same host).
+	if code := send(pve1, obs(`{"kind":"host","name":"pve1","identifiers":[],"children":[
+		{"kind":"vm","name":"dns","identifiers":[{"kind":"container.id","value":"lxc/101"},{"kind":"mac","value":"bc:24:11:00:00:01","strength":"strong"}],
+		 "components":[{"purl":"pkg:deb/debian/bind9@1","name":"bind9","version":"1"}]}]}`)); code != 200 {
+		t.Fatalf("container report = %d", code)
+	}
+	ds := byName()
+	ct := ds["ct101"]
+	if len(devices(t, c, ts.URL)) != before || ct.ID == 0 {
+		t.Fatalf("container did not claim the Proxmox guest: %+v", ds)
+	}
+	hasID := func(d devRow, kind, value string) bool {
+		for _, id := range d.Identifiers {
+			if id.Kind == kind && id.Value == value {
+				return true
+			}
+		}
+		return false
+	}
+	if !hasID(ct, "agent.child", "pve1/lxc/101") {
+		t.Fatalf("no server child id: %+v", ct.Identifiers)
+	}
+
+	// pve1 cannot claim ct201 (guest of pve2) by its MAC: a new device is
+	// made and the MAC stays where it is.
+	send(pve1, obs(`{"kind":"host","identifiers":[],"children":[
+		{"kind":"container","name":"steal","identifiers":[{"kind":"container.id","value":"lxc/201"},{"kind":"mac","value":"bc:24:11:00:00:02","strength":"strong"}]}]}`))
+	ds = byName()
+	if !hasID(ds["ct201"], "mac", "bc:24:11:00:00:02") || hasID(ds["steal"], "mac", "bc:24:11:00:00:02") {
+		t.Fatalf("pve1 took the MAC of a pve2 guest: %+v / %+v", ds["ct201"], ds["steal"])
+	}
+
+	// pve2 cannot address pve1's container by naming the same container.id.
+	send(pve2, obs(`{"kind":"host","identifiers":[],"children":[{"kind":"container","name":"x","identifiers":[{"kind":"container.id","value":"lxc/101"}]}]}`))
+	if hasID(byName()["x"], "agent.child", "pve1/lxc/101") {
+		t.Fatal("pve2 reached pve1's container")
+	}
+
+	// Bad shapes are refused.
+	for _, bad := range []string{
+		`{"kind":"host","identifiers":[],"children":[{"kind":"container","identifiers":[]}]}`,
+		`{"kind":"host","identifiers":[],"children":[{"kind":"container","identifiers":[{"kind":"container.id","value":"../etc"}]}]}`,
+		`{"kind":"host","identifiers":[],"children":[{"kind":"container","identifiers":[{"kind":"container.id","value":"lxc/1"},{"kind":"container.id","value":"lxc/2"}]}]}`,
+		`{"kind":"host","identifiers":[],"children":[{"kind":"container","identifiers":[{"kind":"container.id","value":"lxc/1"}],"children":[{"kind":"container","identifiers":[{"kind":"container.id","value":"lxc/2"}]}]}]}`,
+	} {
+		if code := send(pve1, obs(bad)); code != http.StatusBadRequest {
+			t.Errorf("accepted %s: %d", bad, code)
+		}
+	}
+
+	// A source cannot set agent.child identifiers.
+	send(src, obs(`{"kind":"host","name":"fake","identifiers":[{"kind":"agent.child","value":"pve1/lxc/101","strength":"strong"},{"kind":"mac","value":"00:1a:2b:00:99:01","strength":"strong"}]}`))
+	if hasID(byName()["fake"], "agent.child", "pve1/lxc/101") {
+		t.Fatal("source set an agent.child identifier")
+	}
+}

@@ -99,6 +99,14 @@ type devRow struct {
 	first, last               string
 }
 
+func (t *invTx) ParentOf(id int64) (int64, error) {
+	r, err := t.row(id)
+	if err != nil {
+		return 0, err
+	}
+	return r.parent.Int64, nil
+}
+
 func (t *invTx) row(id int64) (devRow, error) {
 	var r devRow
 	err := t.tx.QueryRowContext(t.ctx, `SELECT kind, name, parent_id, attributes, interfaces, first_seen, last_seen

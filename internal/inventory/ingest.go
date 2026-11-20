@@ -35,6 +35,8 @@ type Tx interface {
 	Lookup(kind, value string) (deviceID int64, ok bool, err error)
 	// Identifiers returns all identifiers of a device.
 	Identifiers(deviceID int64) ([]proto.Identifier, error)
+	// ParentOf returns the parent of a device (0 if none).
+	ParentOf(deviceID int64) (int64, error)
 	CreateDevice(d Device) (int64, error)
 	// UpdateDevice records a new sighting. It sets kind and name only if
 	// they are unknown or empty, merges attributes and sets the parent if
@@ -134,9 +136,12 @@ func (r *resolver) apply(e *proto.Entity, parentID int64) (int64, error) {
 
 	var dev int64
 	var err error
-	if r.agent != "" {
+	switch {
+	case r.agent != "" && parentID != 0:
+		dev, err = r.resolveAgentChild(e, parentID)
+	case r.agent != "":
 		dev, err = r.resolveAgent(e)
-	} else {
+	default:
 		dev, err = r.resolve(e)
 	}
 	if err != nil {
