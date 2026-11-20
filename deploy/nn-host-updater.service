@@ -9,16 +9,28 @@ User=root
 # Docker socket access is root-equivalent. Keep it out of the server container.
 ExecStart=/usr/local/sbin/nn-host-updater run-once
 TimeoutStartSec=30min
-UMask=0022
+UMask=0077
+# Private state (state_dir) and a HOME for the cosign and docker caches.
+StateDirectory=netnoodle-updater
+StateDirectoryMode=0700
+Environment=HOME=/var/lib/netnoodle-updater/.home
 NoNewPrivileges=true
 PrivateTmp=true
-# The binary mode atomically replaces binary_path, which can be under /usr.
-# ProtectSystem=full would block that operation; other hardening stays enabled.
+PrivateDevices=true
+# Read-only file system except the update directories. Binary mode replaces
+# binary_path: add its directory with a drop-in (ReadWritePaths=/opt/netnoodle).
+ProtectSystem=strict
+ReadWritePaths=/var/lib/netnoodle/updater -/opt/netnoodle
 ReadOnlyPaths=/etc/nn-host-updater
 ProtectHome=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
+ProtectKernelLogs=true
 ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
 RestrictSUIDSGID=true
+RestrictRealtime=true
 LockPersonality=true
+SystemCallArchitectures=native
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

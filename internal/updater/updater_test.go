@@ -43,11 +43,14 @@ func (r *fakeRunner) Run(_ context.Context, env []string, name string, args ...s
 	}
 	if strings.HasPrefix(call, "docker image inspect --format {{index .RepoDigests 0}}") {
 		if strings.HasSuffix(call, "sha256:running") {
-			return oldDigest, nil
+			return r.image, nil
 		}
 		return newDigest, nil
 	}
 	if strings.Contains(call, "org.opencontainers.image.version") {
+		if strings.HasSuffix(call, oldDigest) {
+			return oldVersion, nil
+		}
 		return r.label, nil
 	}
 	if strings.Contains(call, " ps -q ") {
@@ -81,6 +84,7 @@ func fixture(t *testing.T) (*Updater, *fakeRunner, Request) {
 	t.Helper()
 	c := DefaultConfig()
 	c.SharedDir = t.TempDir()
+	c.StateDir = t.TempDir()
 	c.ComposeFile = filepath.Join(c.SharedDir, "compose.yaml")
 	c.ComposeProject = "test"
 	c.ImageRepo = "ghcr.io/test/server"
@@ -358,6 +362,10 @@ type binaryRunner struct {
 
 func (r *binaryRunner) Run(ctx context.Context, env []string, name string, args ...string) (string, error) {
 	if len(args) == 1 && args[0] == "version" {
+		// The installed binary reports its own version; the staged one the new.
+		if b, e := os.ReadFile(name); e == nil && string(b) == "old binary" {
+			return oldVersion + " v1", nil
+		}
 		return r.version + " v1", nil
 	}
 	return r.fake.Run(ctx, env, name, args...)

@@ -16,17 +16,24 @@ type Cosign struct {
 	Key      string `json:"key,omitempty"`
 	Identity string `json:"certificate_identity_regexp,omitempty"`
 	Issuer   string `json:"certificate_oidc_issuer,omitempty"`
+	// PromoteIdentity is the certificate identity of the promote workflow.
+	// On the stable channel (keyless, compose mode) the image must also
+	// have a signature of this identity with the annotation channel=stable.
+	PromoteIdentity string `json:"promote_identity_regexp,omitempty"`
 }
 type Config struct {
-	Mode               string `json:"mode"`
-	ComposeFile        string `json:"compose_file"`
-	ComposeProject     string `json:"compose_project"`
-	Service            string `json:"service"`
-	ImageRepo          string `json:"image_repo"`
-	Channel            string `json:"channel"`
-	RequireSignature   bool   `json:"require_signature"`
-	Cosign             Cosign `json:"cosign"`
-	SharedDir          string `json:"shared_dir"`
+	Mode             string `json:"mode"`
+	ComposeFile      string `json:"compose_file"`
+	ComposeProject   string `json:"compose_project"`
+	Service          string `json:"service"`
+	ImageRepo        string `json:"image_repo"`
+	Channel          string `json:"channel"`
+	RequireSignature bool   `json:"require_signature"`
+	Cosign           Cosign `json:"cosign"`
+	SharedDir        string `json:"shared_dir"`
+	// StateDir is host-private (root, 0700) and must not be inside
+	// SharedDir: the server container must never see or write it.
+	StateDir           string `json:"state_dir"`
 	HealthURL          string `json:"health_url"`
 	HealthFingerprint  string `json:"health_fingerprint"`
 	HealthTimeout      string `json:"health_timeout"`
@@ -37,7 +44,7 @@ type Config struct {
 }
 
 func DefaultConfig() Config {
-	return Config{Mode: "compose", Service: "server", Channel: "stable", RequireSignature: true, SharedDir: "/var/lib/netnoodle/updater", HealthTimeout: "120s", KeepDays: 7, Cosign: Cosign{Path: "cosign"}}
+	return Config{Mode: "compose", Service: "server", Channel: "stable", RequireSignature: true, SharedDir: "/var/lib/netnoodle/updater", StateDir: "/var/lib/netnoodle-updater", HealthTimeout: "120s", KeepDays: 7, Cosign: Cosign{Path: "cosign"}}
 }
 func LoadConfig(path string) (Config, error) {
 	c := DefaultConfig()
@@ -60,6 +67,9 @@ func (c Config) Validate() error {
 	if (!filepath.IsAbs(c.SharedDir) && !strings.HasPrefix(c.SharedDir, "/")) || c.KeepDays < 1 || c.KeepDays > 365 {
 		return fmt.Errorf("invalid shared_dir or keep_days")
 	}
+	if (!filepath.IsAbs(c.StateDir) && !strings.HasPrefix(c.StateDir, "/")) || within(c.StateDir, c.SharedDir) || within(c.SharedDir, c.StateDir) {
+		return fmt.Errorf("state_dir must be absolute and outside shared_dir")
+	}
 	d, e := time.ParseDuration(c.HealthTimeout)
 	if e != nil || d <= 0 || d > time.Hour {
 		return fmt.Errorf("invalid health_timeout")
@@ -73,6 +83,9 @@ func (c Config) Validate() error {
 	}
 	if c.RequireSignature && (c.Cosign.Path == "" || (c.Cosign.Key == "" && (c.Cosign.Identity == "" || c.Cosign.Issuer == ""))) {
 		return fmt.Errorf("signature verification requires cosign key or identity and issuer")
+	}
+	if c.RequireSignature && c.Mode == "compose" && c.Channel == "stable" && c.Cosign.Key == "" && c.Cosign.PromoteIdentity == "" {
+		return fmt.Errorf("the stable channel requires cosign.promote_identity_regexp (promotion signature)")
 	}
 	if c.Cosign.Key != "" && (c.Cosign.Identity != "" || c.Cosign.Issuer != "") {
 		return fmt.Errorf("cosign must use either key or certificate identity and issuer")
@@ -94,4 +107,10 @@ func (c Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+// within reports whether path a is b or inside b.
+func within(a, b string) bool {
+	a, b = filepath.ToSlash(filepath.Clean(a)), filepath.ToSlash(filepath.Clean(b))
+	return a == b || strings.HasPrefix(a, strings.TrimSuffix(b, "/")+"/")
 }

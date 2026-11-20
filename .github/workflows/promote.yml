@@ -1,6 +1,11 @@
 # Promote a release to the "stable" channel (docs/design/lifecycle.md section 2a, D-067).
-# The image tag "stable" gets the SAME digest as the release (no new build) and the git
-# branch "stable" is fast-forwarded to the release tag.
+# The image tag "stable" gets the SAME digest as the release (no new build), the digest
+# gets a keyless signature of this workflow with the annotation channel=stable (the host
+# updater requires it on stable), and only then the git branch "stable" is
+# fast-forwarded to the release tag.
+# The job runs in the environment "stable-promotion": add required reviewers to it in
+# the repository settings (Settings > Environments) so that one write-access account
+# cannot promote alone.
 name: promote
 
 on:
@@ -24,9 +29,11 @@ concurrency:
 jobs:
   promote:
     runs-on: ubuntu-latest
+    environment: stable-promotion
     permissions:
       contents: write
       packages: write
+      id-token: write # keyless signature channel=stable
     env:
       VERSION: ${{ inputs.version }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -49,7 +56,36 @@ jobs:
           if [ "$age_days" -lt 7 ] && [ "${{ inputs.skip_wait }}" != true ]; then
             echo "release is younger than 7 days; set skip_wait for a security fix"; exit 1
           fi
-      - name: fast-forward branch stable
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+      - name: check the stable branch first (no downgrade)
+        run: |
+          set -eu
+          commit=$(git rev-parse "$VERSION^{commit}")
+          if git ls-remote --exit-code --heads origin stable >/dev/null; then
+            git fetch origin stable
+            git merge-base --is-ancestor origin/stable "$commit" || { echo "stable is not an ancestor of $VERSION (no downgrades)"; exit 1; }
+          fi
+      - name: re-tag images (same digest), check, sign channel=stable
+        run: |
+          set -eu
+          owner=${GITHUB_REPOSITORY_OWNER,,}
+          for t in server scan actor; do
+            img="ghcr.io/$owner/netnoodle-$t"
+            want=$(docker buildx imagetools inspect "$img:$VERSION" --format '{{json .Manifest.Digest}}' | tr -d '"')
+            echo "$want" | grep -Eq '^sha256:[0-9a-f]{64}$' || { echo "no digest for $img:$VERSION"; exit 1; }
+            cosign verify --certificate-identity-regexp "^https://github\.com/${GITHUB_REPOSITORY}/\.github/workflows/release\.yml@refs/tags/${VERSION}$" --certificate-oidc-issuer https://token.actions.githubusercontent.com "$img@$want" >/dev/null
+            cosign sign --yes -a channel=stable "$img@$want"
+            docker buildx imagetools create --tag "$img:stable" "$img@$want"
+            got=$(docker buildx imagetools inspect "$img:stable" --format '{{json .Manifest.Digest}}' | tr -d '"')
+            [ "$got" = "$want" ] || { echo "$img:stable is $got, expected $want"; exit 1; }
+          done
+      - name: fast-forward branch stable (last step, the binary updater follows it)
         run: |
           set -eu
           commit=$(git rev-parse "$VERSION^{commit}")
@@ -58,21 +94,6 @@ jobs:
             git merge-base --is-ancestor origin/stable "$commit" || { echo "stable is not an ancestor of $VERSION (no downgrades)"; exit 1; }
           fi
           git push origin "$commit:refs/heads/stable"
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: re-tag images (same digest)
-        run: |
-          set -eu
-          owner=${GITHUB_REPOSITORY_OWNER,,}
-          for t in server scan actor; do
-            img="ghcr.io/$owner/netnoodle-$t"
-            docker buildx imagetools create --tag "$img:stable" "$img:$VERSION"
-            docker buildx imagetools inspect "$img:stable" | head -3
-          done
       - name: mark the release
         run: |
           body=$(gh release view "$VERSION" --json body -q .body)

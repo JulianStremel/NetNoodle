@@ -36,11 +36,12 @@ The server never gets the Docker socket. A small program on the host, `nn-host-u
    go build -trimpath -o bin/nn-host-updater ./cmd/nn-host-updater
    sudo install -m 0755 bin/nn-host-updater /usr/local/sbin/nn-host-updater
    sudo install -d -m 0755 /etc/nn-host-updater /var/lib/netnoodle/updater /var/lib/netnoodle/updater/status
-   sudo install -d -m 0700 /var/lib/netnoodle/updater/state
    sudo install -d -o 65532 -g 65532 -m 0750 /var/lib/netnoodle/updater/requests
    sudo install -m 0600 deploy/nn-host-updater.example.json /etc/nn-host-updater/config.json
    sudoedit /etc/nn-host-updater/config.json   # compose file, image repository, cosign trust, server fingerprint
    ```
+
+   The updater keeps its private state in `/var/lib/netnoodle-updater` (`state_dir`, root, mode 0700). systemd makes this directory. It must not be in the shared directory: the server container must not see it. On the `stable` channel, the image must also have the signature of the promote workflow (`promote_identity_regexp`). The updater uses only the channel of its own configuration, and it gets the installed version from Docker or from the binary, not from the server. It keeps at most 8 requests and deletes other files in `requests/`. After 3 failed recoveries, it stops and the System page shows "manual action required".
 
 2. Turn on updates in the server configuration and recreate the server with `compose.yaml` (it mounts the shared directory):
 

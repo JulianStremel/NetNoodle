@@ -56,6 +56,15 @@ The server container never gets the Docker or Podman socket: whoever has it is r
 
 On a VM without containers, the same updater replaces the `nn-server` binary instead (download from the release, both signatures, `*.prev`, health check, rollback).
 
+**Trust rules (security review 2026-11-20).** The server is not trusted by the updater:
+
+- Only the channel in the host configuration selects the release. A request for another channel is refused; a requested version must be the version that the channel gives.
+- The installed version and digest come from the host (`docker inspect` and the signed version label, or `nn-server version` of the installed binary), never from `/v1/health`. The running image must also be a signed release, because it is the rollback target.
+- On `stable`, the digest must also have the signature of `promote.yml` with the annotation `channel=stable`. A moved registry tag alone cannot put an unpromoted release on stable hosts.
+- Host state (`/var/lib/netnoodle-updater`, root 0700) is not in the shared directory. The server container mounts only `requests/` (read-write) and `status/` (read-only). Paths of executables and staged files are derived from the configuration and the request ID, never read from a file.
+- Only the last update can be rolled back (`current.json`), and only while its digest still runs.
+- At most 8 pending requests; other files in `requests/` are deleted. After 3 failed recoveries the request ends with "failed, manual action required". Old state, staged downloads, `*.prev` and status files are deleted after the retention time.
+
 **Mode B — updater sidecar (for hosts without systemd, for example a NAS).** A separate container `nn-updater` with the Docker socket, on an internal network, without a published port. It accepts only authenticated requests from the server (shared secret file) and only the same "update to channel/version" request; the image repository and signature rules are in its own configuration. The socket risk stays with this small container, never with the server. Documented as the less secure mode.
 
 **Common rules:** updates only through a channel (no downgrades, section 2a); the kill switch and open orders are kept (actors drain); the web interface shows who started the update.

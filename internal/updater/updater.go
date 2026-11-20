@@ -31,7 +31,26 @@ type State struct {
 	Stage      string  `json:"stage,omitempty"`
 	Previous   string  `json:"previous,omitempty"`
 	ReleaseURL string  `json:"release_url,omitempty"`
+	// Recoveries counts recovery attempts; after maxRecoveries the request
+	// fails terminally instead of retrying on every activation.
+	Recoveries int `json:"recoveries,omitempty"`
 }
+
+// Current is the host's record of the release that the last successful
+// update or rollback installed (state_dir/current.json). Only the
+// transition in ID can be rolled back.
+type Current struct {
+	ID      string `json:"id"`
+	Version string `json:"version"`
+	Digest  string `json:"digest"`
+}
+
+const (
+	maxRecoveries = 3
+	// maxQueue is the number of pending requests kept; more are deleted.
+	maxQueue = 8
+)
+
 type Updater struct {
 	Config Config
 	Runner Runner
@@ -75,7 +94,7 @@ func New(c Config, r Runner) (*Updater, error) {
 	return u, nil
 }
 func (u *Updater) Init() error {
-	for _, d := range []string{"requests", "status", "state"} {
+	for _, d := range []string{"requests", "status"} {
 		p, e := SafePath(u.Config.SharedDir, d)
 		if e != nil {
 			return e
@@ -83,13 +102,25 @@ func (u *Updater) Init() error {
 		if e = os.MkdirAll(p, 0755); e != nil {
 			return e
 		}
-		if d == "state" {
-			if e = os.Chmod(p, 0700); e != nil {
-				return e
-			}
-		}
 	}
-	return nil
+	// Host state selects images, binaries and backups. It lives outside the
+	// directory that the server container can write (security review
+	// 2026-11-20).
+	p, e := SafePath(u.Config.StateDir)
+	if e != nil {
+		return e
+	}
+	if e = os.MkdirAll(p, 0700); e != nil {
+		return e
+	}
+	if e = os.Chmod(p, 0700); e != nil {
+		return e
+	}
+	return ownedBySelf(p)
+}
+func (u *Updater) stagePath(id string) string { return filepath.Join(u.Config.StateDir, id+".bin") }
+func (u *Updater) previousPath(id string) string {
+	return u.Config.BinaryPath + "." + id + ".prev"
 }
 func (u *Updater) compose(ctx context.Context, image string, args ...string) (string, error) {
 	base := []string{"compose", "--file", u.Config.ComposeFile, "--project-name", u.Config.ComposeProject}
@@ -100,11 +131,11 @@ func (u *Updater) compose(ctx context.Context, image string, args ...string) (st
 	return u.Runner.Run(ctx, env, "docker", append(base, args...)...)
 }
 func (u *Updater) save(s *State) error {
-	// Host state is private and never mounted as writable into the server.
-	if e := WriteJSON(u.Config.SharedDir, s, "state", s.ID+".json"); e != nil {
+	// Host state is private and never mounted into the server.
+	if e := WriteJSON(u.Config.StateDir, s, s.ID+".json"); e != nil {
 		return e
 	}
-	p, _ := SafePath(u.Config.SharedDir, "state", s.ID+".json")
+	p, _ := SafePath(u.Config.StateDir, s.ID+".json")
 	if e := os.Chmod(p, 0600); e != nil {
 		return e
 	}
@@ -130,6 +161,27 @@ func (u *Updater) RunOnce(ctx context.Context) error {
 		return e
 	}
 	var errs []error
+	// The request directory is written by the untrusted server. Delete what
+	// is not a small request file, and keep at most maxQueue requests.
+	queued := 0
+	for _, entry := range entries {
+		name := entry.Name()
+		info, ie := entry.Info()
+		if ie != nil {
+			continue
+		}
+		if strings.HasSuffix(name, ".json") && info.Mode().IsRegular() && info.Size() <= MaxJSON && queued < maxQueue {
+			queued++
+			continue
+		}
+		if re := os.Remove(filepath.Join(u.Config.SharedDir, "requests", name)); re != nil && !os.IsNotExist(re) {
+			errs = append(errs, re)
+		}
+	}
+	if entries, e = os.ReadDir(filepath.Join(u.Config.SharedDir, "requests")); e != nil {
+		return e
+	}
+	defer u.cleanup()
 	for _, entry := range entries {
 		name := entry.Name()
 		if !strings.HasSuffix(name, ".json") {
@@ -151,10 +203,19 @@ func (u *Updater) RunOnce(ctx context.Context) error {
 			continue
 		}
 		var s State
-		e := ReadJSON(u.Config.SharedDir, &s, "state", name)
+		e := ReadJSON(u.Config.StateDir, &s, name)
 		if e == nil {
-			if s.ID != id {
-				return fmt.Errorf("state id mismatch")
+			if s.ID != id || s.Request.ID != id || s.Request.Validate() != nil {
+				return fmt.Errorf("state %s is inconsistent", id)
+			}
+			// Executable and staging paths are derived, never loaded.
+			s.Stage = u.stagePath(id)
+			s.Previous = ""
+			if u.Config.Mode == "binary" {
+				s.Previous = u.previousPath(id)
+				if s.Request.Kind == "rollback" {
+					s.Previous = u.previousPath(s.Request.To)
+				}
 			}
 			if Terminal(s.State) {
 				if e = u.save(&s); e == nil {
@@ -239,11 +300,18 @@ func (u *Updater) process(ctx context.Context, s *State) error {
 		case "verify":
 			e = u.verify(ctx, s)
 		case "downgrade":
-			var h Health
-			h, e = u.Health(ctx)
+			// The installed release comes from the host (Docker or the
+			// binary), never from the server's health answer.
+			var cur Current
+			cur, e = u.live(ctx)
 			if e == nil {
-				s.FromVersion = h.Version
-				s.Schema = h.Schema
+				s.FromVersion, s.FromDigest = cur.Version, cur.Digest
+				var h Health
+				if h, e = u.Health(ctx); e == nil {
+					s.Schema = h.Schema
+				}
+			}
+			if e == nil {
 				cmp, ok := Compare(s.ToVersion, s.FromVersion)
 				if !ok || cmp < 0 {
 					e = fmt.Errorf("downgrade or unknown version refused: %s to %s", s.FromVersion, s.ToVersion)
@@ -282,6 +350,9 @@ func (u *Updater) process(ctx context.Context, s *State) error {
 	s.State = "done"
 	s.FinishedAt = u.Now().UTC()
 	s.KeepUntil = s.FinishedAt.Add(time.Duration(u.Config.KeepDays) * 24 * time.Hour)
+	if e := WriteJSON(u.Config.StateDir, Current{ID: s.ID, Version: s.ToVersion, Digest: s.ToDigest}, "current.json"); e != nil {
+		return e
+	}
 	return u.save(s)
 }
 func hasStep(s *State, name string) bool {
@@ -293,13 +364,12 @@ func hasStep(s *State, name string) bool {
 	return false
 }
 func (u *Updater) resolve(ctx context.Context, s *State) error {
-	tag := s.Request.Version
-	if tag == "" {
-		tag = s.Request.Channel
+	// Only the host's channel selects the release. A requested version is
+	// an assertion that must match it (security review 2026-11-20).
+	if s.Request.Channel != u.Config.Channel {
+		return fmt.Errorf("request channel %q differs from host channel %q", s.Request.Channel, u.Config.Channel)
 	}
-	if tag == "" {
-		tag = u.Config.Channel
-	}
+	tag := u.Config.Channel
 	if u.Config.Mode == "binary" {
 		return u.resolveBinary(ctx, s, tag)
 	}
@@ -343,33 +413,90 @@ func (u *Updater) verify(ctx context.Context, s *State) error {
 	if !u.Config.RequireSignature {
 		return nil
 	}
-	_, e := u.Runner.Run(ctx, nil, u.Config.Cosign.Path, append(append([]string{"verify"}, u.signatureArgs()...), s.ToDigest)...)
+	if e := u.verifyImage(ctx, s.ToDigest); e != nil {
+		return e
+	}
+	// A registry tag can be moved. On stable, the digest must also carry the
+	// signature of the promote workflow (annotation channel=stable).
+	if u.Config.Channel == "stable" && u.Config.Cosign.Key == "" {
+		_, e := u.Runner.Run(ctx, nil, u.Config.Cosign.Path, "verify", "--certificate-identity-regexp", u.Config.Cosign.PromoteIdentity, "--certificate-oidc-issuer", u.Config.Cosign.Issuer, "-a", "channel=stable", s.ToDigest)
+		if e != nil {
+			return fmt.Errorf("image is not promoted to stable: %w", e)
+		}
+	}
+	return nil
+}
+func (u *Updater) verifyImage(ctx context.Context, digest string) error {
+	_, e := u.Runner.Run(ctx, nil, u.Config.Cosign.Path, append(append([]string{"verify"}, u.signatureArgs()...), digest)...)
 	return e
+}
+
+// live returns the release that runs now, as the host sees it. In compose
+// mode the running image must be a signed release: it is also the
+// rollback target.
+func (u *Updater) live(ctx context.Context) (Current, error) {
+	if u.Config.Mode == "binary" {
+		out, e := u.Runner.Run(ctx, nil, u.Config.BinaryPath, "version")
+		if e != nil {
+			return Current{}, e
+		}
+		f := strings.Fields(out)
+		if len(f) < 1 || !release.MatchString(f[0]) {
+			return Current{}, fmt.Errorf("installed binary has no release version")
+		}
+		d, e := fileDigest(u.Config.BinaryPath)
+		return Current{Version: f[0], Digest: d}, e
+	}
+	out, e := u.compose(ctx, "", "ps", "-q", u.Config.Service)
+	if e != nil {
+		return Current{}, e
+	}
+	container := strings.TrimSpace(out)
+	if container == "" || strings.ContainsAny(container, "\r\n") {
+		return Current{}, fmt.Errorf("expected one running container")
+	}
+	if out, e = u.Runner.Run(ctx, nil, "docker", "inspect", "--format", "{{.Image}}", container); e != nil {
+		return Current{}, e
+	}
+	if out, e = u.Runner.Run(ctx, nil, "docker", "image", "inspect", "--format", "{{index .RepoDigests 0}}", strings.TrimSpace(out)); e != nil {
+		return Current{}, e
+	}
+	c := Current{Digest: strings.TrimSpace(out)}
+	if !u.validDigest(c.Digest) {
+		return Current{}, fmt.Errorf("running image is not a pinned release in configured repository")
+	}
+	if out, e = u.Runner.Run(ctx, nil, "docker", "image", "inspect", "--format", `{{index .Config.Labels "org.opencontainers.image.version"}}`, c.Digest); e != nil {
+		return Current{}, e
+	}
+	c.Version = "v" + strings.TrimPrefix(strings.TrimSpace(out), "v")
+	if !release.MatchString(c.Version) {
+		return Current{}, fmt.Errorf("running image has no release version label")
+	}
+	if u.Config.RequireSignature {
+		if e = u.verifyImage(ctx, c.Digest); e != nil {
+			return Current{}, fmt.Errorf("running image is not a signed release: %w", e)
+		}
+	}
+	return c, nil
+}
+func fileDigest(path string) (string, error) {
+	f, e := os.Open(path)
+	if e != nil {
+		return "", e
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, e = io.Copy(h, f); e != nil {
+		return "", e
+	}
+	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
 }
 func (u *Updater) backup(ctx context.Context, s *State) error {
 	var out string
 	var e error
 	if u.Config.Mode == "compose" {
-		out, e = u.compose(ctx, "", "ps", "-q", u.Config.Service)
-		if e != nil {
-			return e
-		}
-		container := strings.TrimSpace(out)
-		if container == "" || strings.ContainsAny(container, "\r\n") {
-			return fmt.Errorf("expected one running container")
-		}
-		out, e = u.Runner.Run(ctx, nil, "docker", "inspect", "--format", "{{.Image}}", container)
-		if e != nil {
-			return e
-		}
-		out, e = u.Runner.Run(ctx, nil, "docker", "image", "inspect", "--format", "{{index .RepoDigests 0}}", strings.TrimSpace(out))
-		if e != nil {
-			return e
-		}
-		s.FromDigest = strings.TrimSpace(out)
 		if !u.validDigest(s.FromDigest) {
-			s.FromDigest = ""
-			return fmt.Errorf("running image is not a pinned release in configured repository")
+			return fmt.Errorf("running image unknown; the downgrade step sets it")
 		}
 		out, e = u.compose(ctx, "", "exec", "-T", u.Config.Service, "nn-server", "backup", "--config", "/etc/netnoodle/netnoodle.json", "--json")
 	} else {
@@ -389,17 +516,16 @@ func (u *Updater) backup(ctx context.Context, s *State) error {
 	}
 	s.Backup = result.Path
 	if u.Config.Mode == "binary" {
-		s.Previous = u.Config.BinaryPath + "." + s.ID + ".prev"
+		s.Previous = u.previousPath(s.ID)
 		if e = copyFile(u.Config.BinaryPath, s.Previous, 0755); e != nil {
 			return e
 		}
-		s.FromDigest = s.Previous
 	}
 	return nil
 }
 func (u *Updater) swap(ctx context.Context, s *State, image string) error {
 	if u.Config.Mode == "binary" {
-		if e := copyFile(s.Stage, u.Config.BinaryPath+".next", 0755); e != nil {
+		if e := copyFile(u.stagePath(s.ID), u.Config.BinaryPath+".next", 0755); e != nil {
 			return e
 		}
 		if e := os.Rename(u.Config.BinaryPath+".next", u.Config.BinaryPath); e != nil {
@@ -444,6 +570,14 @@ func (u *Updater) healthy(ctx context.Context, s *State, want string) error {
 	}
 }
 func (u *Updater) recover(ctx context.Context, s *State) error {
+	s.Recoveries++
+	if s.Recoveries > maxRecoveries {
+		// Stop retrying a destructive recovery on every activation.
+		s.State = "failed"
+		s.Error = fmt.Sprintf("recovery failed %d times; manual action required (backup %s, previous release %s)", maxRecoveries, s.Backup, s.FromVersion)
+		s.FinishedAt = u.Now().UTC()
+		return u.save(s)
+	}
 	s.State = "rollback"
 	if e := u.save(s); e != nil {
 		return e
@@ -498,6 +632,10 @@ func (u *Updater) recover(ctx context.Context, s *State) error {
 		s.Error = ""
 		s.FromVersion, s.ToVersion = s.ToVersion, s.FromVersion
 		s.FromDigest, s.ToDigest = s.ToDigest, s.FromDigest
+		// A rolled-back release cannot be rolled back again.
+		if e := WriteJSON(u.Config.StateDir, Current{Version: s.ToVersion, Digest: s.ToDigest}, "current.json"); e != nil {
+			return e
+		}
 	} else {
 		s.State = "rolled-back"
 	}
@@ -506,14 +644,22 @@ func (u *Updater) recover(ctx context.Context, s *State) error {
 }
 func (u *Updater) rollback(ctx context.Context, s *State) error {
 	var target State
-	e := ReadJSON(u.Config.SharedDir, &target, "state", s.Request.To+".json")
+	var cur Current
+	e := ReadJSON(u.Config.StateDir, &target, s.Request.To+".json")
 	if e == nil && (target.ID != s.Request.To || target.State != "done" || target.Kind == "rollback" || !target.KeepUntil.After(u.Now())) {
 		e = fmt.Errorf("rollback target is not retained")
 	}
+	// Only the last installed transition can be rolled back, and only while
+	// its release still runs (host view, not the server's health answer).
 	if e == nil {
-		var h Health
-		h, e = u.Health(ctx)
-		if e == nil && h.Version != target.ToVersion {
+		if ce := ReadJSON(u.Config.StateDir, &cur, "current.json"); ce != nil || cur.ID != target.ID {
+			e = fmt.Errorf("rollback target is not the last update")
+		}
+	}
+	if e == nil {
+		var live Current
+		live, e = u.live(ctx)
+		if e == nil && (live.Digest != target.ToDigest || live.Version != target.ToVersion) {
 			e = fmt.Errorf("rollback target is not current")
 		}
 	}
@@ -526,7 +672,10 @@ func (u *Updater) rollback(ctx context.Context, s *State) error {
 	s.ToVersion = target.ToVersion
 	s.FromDigest = target.FromDigest
 	s.ToDigest = target.ToDigest
-	s.Previous = target.Previous
+	s.Previous = ""
+	if u.Config.Mode == "binary" {
+		s.Previous = u.previousPath(target.ID)
+	}
 	s.Backup = target.Backup
 	s.Schema = target.Schema
 	s.Restore = true
@@ -564,7 +713,10 @@ func copyFile(src, dst string, mode os.FileMode) error {
 		return e
 	}
 	defer f.Close()
-	o, e := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
+	if e := os.Remove(dst); e != nil && !os.IsNotExist(e) {
+		return e
+	}
+	o, e := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
 	if e != nil {
 		return e
 	}
@@ -602,7 +754,10 @@ func (u *Updater) download(ctx context.Context, url, path string) error {
 			return fmt.Errorf("insufficient space for download and staging")
 		}
 	}
-	f, e := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
+	if e := os.Remove(path); e != nil && !os.IsNotExist(e) {
+		return e
+	}
+	f, e := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if e != nil {
 		return e
 	}
@@ -616,7 +771,7 @@ func (u *Updater) download(ctx context.Context, url, path string) error {
 	return errors.Join(e, f.Close())
 }
 func (u *Updater) resolveBinary(ctx context.Context, s *State, tag string) error {
-	s.Stage = filepath.Join(u.Config.SharedDir, "state", s.ID+".bin")
+	s.Stage = u.stagePath(s.ID)
 	var e error
 	tag, e = u.binaryTag(ctx, tag)
 	if e != nil {
@@ -665,15 +820,44 @@ func (u *Updater) verifyBinary(ctx context.Context, s *State) error {
 	if s.Request.Version != "" && s.Request.Version != s.ToVersion {
 		return fmt.Errorf("binary version mismatch")
 	}
-	f, e := os.Open(s.Stage)
+	s.ToDigest, e = fileDigest(s.Stage)
+	return e
+}
+
+// cleanup removes host state, staged files, previous binaries and status
+// files of finished requests after their keep time (bounded per run).
+func (u *Updater) cleanup() {
+	entries, e := os.ReadDir(u.Config.StateDir)
 	if e != nil {
-		return e
+		return
 	}
-	defer f.Close()
-	h := sha256.New()
-	if _, e = io.Copy(h, f); e != nil {
-		return e
+	var cur Current
+	_ = ReadJSON(u.Config.StateDir, &cur, "current.json")
+	keep := time.Duration(u.Config.KeepDays) * 24 * time.Hour
+	removed := 0
+	for _, entry := range entries {
+		id, ok := strings.CutSuffix(entry.Name(), ".json")
+		if !ok || !ValidID(id) || id == cur.ID || removed >= 100 {
+			continue
+		}
+		var s State
+		if ReadJSON(u.Config.StateDir, &s, entry.Name()) != nil || !Terminal(s.State) || s.FinishedAt.IsZero() {
+			continue
+		}
+		until := s.KeepUntil
+		if until.IsZero() {
+			until = s.FinishedAt.Add(keep)
+		}
+		if u.Now().Before(until) {
+			continue
+		}
+		stage := u.stagePath(id)
+		for _, p := range []string{stage, stage + ".bundle", stage + ".tar.gz", stage + ".SHA256SUMS", stage + ".SHA256SUMS.sigstore.json", filepath.Join(u.Config.SharedDir, "status", id+".json"), filepath.Join(u.Config.StateDir, id+".json")} {
+			_ = os.Remove(p)
+		}
+		if u.Config.Mode == "binary" {
+			_ = os.Remove(u.previousPath(id))
+		}
+		removed++
 	}
-	s.ToDigest = "sha256:" + hex.EncodeToString(h.Sum(nil))
-	return nil
 }

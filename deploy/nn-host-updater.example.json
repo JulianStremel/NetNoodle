@@ -8,10 +8,12 @@
   "require_signature": true,
   "cosign": {
     "path": "/usr/local/bin/cosign",
-    "certificate_identity_regexp": "^https://github\\.com/JulianStremel/netnoodle/\\.github/workflows/release\\.yml@refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+$",
-    "certificate_oidc_issuer": "https://token.actions.githubusercontent.com"
+    "certificate_identity_regexp": "^https://github\\.com/JulianStremel/NetNoodle/\\.github/workflows/release\\.yml@refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+$",
+    "certificate_oidc_issuer": "https://token.actions.githubusercontent.com",
+    "promote_identity_regexp": "^https://github\\.com/JulianStremel/NetNoodle/\\.github/workflows/promote\\.yml@refs/heads/main$"
   },
   "shared_dir": "/var/lib/netnoodle/updater",
+  "state_dir": "/var/lib/netnoodle-updater",
   "health_url": "https://127.0.0.1:7443/v1/health",
   "health_fingerprint": "REPLACE_WITH_SERVER_SHA256_FINGERPRINT",
   "health_timeout": "120s",

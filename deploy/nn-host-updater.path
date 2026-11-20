@@ -4,6 +4,9 @@ Description=Watch netnoodle host update requests
 [Path]
 PathExistsGlob=/var/lib/netnoodle/updater/requests/*.json
 Unit=nn-host-updater.service
+# The server can write many request files; do not start the updater in a loop.
+TriggerLimitIntervalSec=60
+TriggerLimitBurst=5
 
 [Install]
 WantedBy=multi-user.target

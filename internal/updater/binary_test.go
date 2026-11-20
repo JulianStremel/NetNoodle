@@ -66,9 +66,11 @@ func TestSignedReleaseArchive(t *testing.T) {
 			}
 			archive := buf.Bytes()
 			sum := sha256.Sum256(archive)
-			checksum := fmt.Sprintf("%x  netnoodle_v1.3.0_linux_amd64.tar.gz\n", sum)
+			// The host channel selects the release (a mirror publishes it under
+			// the channel name); the requested version is only an assertion.
+			checksum := fmt.Sprintf("%x  netnoodle_stable_linux_amd64.tar.gz\n", sum)
 			if tampered {
-				checksum = strings.Repeat("0", 64) + "  netnoodle_v1.3.0_linux_amd64.tar.gz\n"
+				checksum = strings.Repeat("0", 64) + "  netnoodle_stable_linux_amd64.tar.gz\n"
 			}
 			ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch {
@@ -121,7 +123,7 @@ func TestUntrustedArchiveNeverExtractsPaths(t *testing.T) {
 	}
 	_ = tw.Close()
 	_ = gz.Close()
-	s := State{Status: Status{ID: req.ID}, Stage: u.Config.SharedDir + "/state/staged", ReleaseURL: "https://example.com/release.tar.gz"}
+	s := State{Status: Status{ID: req.ID}, Stage: u.Config.StateDir + "/staged", ReleaseURL: "https://example.com/release.tar.gz"}
 	if e := os.WriteFile(s.Stage+".tar.gz", buf.Bytes(), 0600); e != nil {
 		t.Fatal(e)
 	}

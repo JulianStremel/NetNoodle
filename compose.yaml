@@ -17,8 +17,11 @@ services:
     volumes:
       - server-data:/var/lib/netnoodle/data
       - ./config:/etc/netnoodle:ro
-      # Host owns the parent, status/ and state/; UID 65532 owns requests/.
-      - ${NN_UPDATER_DIR:-/var/lib/netnoodle/updater}:/var/lib/netnoodle/updater
+      # Update requests to nn-host-updater (UID 65532 owns requests/). The
+      # server only reads status/. The updater's private state is elsewhere
+      # (/var/lib/netnoodle-updater) and is never mounted.
+      - ${NN_UPDATER_DIR:-/var/lib/netnoodle/updater}/requests:/var/lib/netnoodle/updater/requests
+      - ${NN_UPDATER_DIR:-/var/lib/netnoodle/updater}/status:/var/lib/netnoodle/updater/status:ro
 
   scan:
     build: { context: ., target: scan }
