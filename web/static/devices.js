@@ -1,5 +1,5 @@
 // Devices: list and detail pages.
-import { api, el, table, fmtTime, registerView, sevPill } from "./app.js";
+import { api, el, table, fmtTime, registerView, sevPill, hashParams } from "./app.js";
 import { exploitCell, exposedCell, vulnCell } from "./findings.js";
 
 const idsOf = (d, kind) => d.identifiers.filter((i) => i.kind === kind).map((i) => i.value);
@@ -21,6 +21,8 @@ async function list(root) {
   const label = (d) => d.name || idsOf(d, "hostname")[0] || idsOf(d, "ip")[0] || `#${d.id}`;
 
   const filter = el("input", { placeholder: "Filter by name, IP, MAC, source, kind …", type: "search" });
+  filter.setAttribute("aria-label", "Filter devices");
+  filter.value = hashParams().get("q") || "";
   const treeBox = el("input", { type: "checkbox" });
   try { treeBox.checked = localStorage.getItem("nn.devices.tree") === "1"; } catch { /* storage blocked */ }
 
@@ -197,7 +199,7 @@ async function detail(root, id) {
 }
 
 registerView("devices", "Devices", async (root, hash) => {
-  const id = hash.split("/")[2];
+  const id = hash.split("?")[0].split("/")[2];
   if (id) return detail(root, encodeURIComponent(id));
   return list(root);
 });

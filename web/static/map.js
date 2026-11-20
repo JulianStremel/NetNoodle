@@ -19,6 +19,7 @@ async function page(root) {
     return null;
   })))).filter(Boolean);
   let graph = await api("/api/graph");
+  if (!root.isConnected) return;
   if (mods.length === 0) {
     root.append(el("p", { class: "muted" }, "No visualizations installed."));
     return;
@@ -52,6 +53,7 @@ async function page(root) {
     class: "link",
     onclick: async () => {
       graph = await api("/api/graph");
+      if (!root.isConnected) return;
       if (current?.update) current.update(graph);
       else show(active);
     },
@@ -66,8 +68,10 @@ async function page(root) {
     current?.destroy?.();
     current = null;
     window.removeEventListener("hashchange", stop);
+    window.removeEventListener("nn:before-render", stop);
   };
   window.addEventListener("hashchange", stop);
+  window.addEventListener("nn:before-render", stop);
 }
 
 registerView("map", "Map", page);

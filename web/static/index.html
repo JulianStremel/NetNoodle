@@ -9,16 +9,39 @@
   <script type="module" src="/main.js"></script>
 </head>
 <body>
-  <header class="top" hidden id="top">
-    <a class="brand" href="#/overview"><img src="/logo.svg" alt="" width="26" height="26">netnoodle</a>
-    <nav id="nav"></nav>
-    <span class="spacer"></span>
-    <span id="who" class="muted"></span>
-    <button id="logout" class="link">Log out</button>
-  </header>
-
-  <main id="main">
-    <section id="login" class="card narrow" hidden>
+  <div id="app" class="app-shell" hidden>
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-brand">
+        <a class="brand" href="#/overview" aria-label="netnoodle overview"><img src="/logo.svg" alt="" width="26" height="26"><span class="brand-name">netnoodle</span></a>
+        <button id="sidebar-toggle" class="icon-button secondary" type="button" aria-label="Collapse sidebar" aria-expanded="true" aria-controls="sidebar" title="Collapse sidebar ([)"></button>
+      </div>
+      <nav id="nav" aria-label="Main"></nav>
+      <div class="sidebar-bottom">
+        <div class="kill-card">
+          <span class="eyebrow kill-heading">Kill switch</span>
+          <label class="kill-control" title="Kill switch: no new orders; reverts continue">
+            <input id="kill-switch" type="checkbox" disabled aria-label="Kill switch: no new orders; reverts continue">
+            <span id="kill-state" class="kill-label">Loading state…</span>
+          </label>
+        </div>
+        <p id="shell-error" class="error small" role="status"></p>
+        <div class="user-row"><span id="who" class="muted user-name"></span><span class="user-separator muted">·</span><button id="logout" class="link" type="button" aria-label="Log out" title="Log out"><span id="user-initial" class="user-initial" aria-hidden="true">A</span><span class="logout-label">Log out</span></button></div>
+      </div>
+    </aside>
+    <main id="main">
+      <div class="main-header">
+        <form id="global-search-form" class="global-search" role="search">
+          <kbd id="search-shortcut">Ctrl K</kbd>
+          <input id="global-search" type="search" aria-label="Search devices, IPs, CVEs, packages" placeholder="Search devices, IPs, CVEs, packages">
+        </form>
+        <span id="report-status" class="muted small" role="status">Last report · feeds</span>
+        <button id="refresh" type="button" class="secondary">Refresh</button>
+      </div>
+      <section id="view" aria-label="Page content"></section>
+    </main>
+  </div>
+  <div class="login-screen" id="login" hidden>
+    <section class="card narrow">
       <h1 class="login-title"><img src="/logo.svg" alt="" width="48" height="48">netnoodle</h1>
       <form id="login-form">
         <label>User <input name="user" autocomplete="username" required value="admin"></label>
@@ -27,7 +50,6 @@
         <p id="login-error" class="error" role="alert"></p>
       </form>
     </section>
-    <section id="view"></section>
-  </main>
+  </div>
 </body>
 </html>

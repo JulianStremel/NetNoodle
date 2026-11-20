@@ -1,3 +1,5 @@
+import { icon } from "./icons.js";
+
 // netnoodle web UI. Plain ES modules, no build step.
 // Each view is a function that renders into #view; views register in VIEWS.
 
@@ -16,6 +18,9 @@ export async function api(path, opts = {}) {
     throw new Error("login required");
   }
   if (!res.ok) throw new Error(data.error || res.statusText);
+  if (init.method !== "GET" && (/^\/api\/proposals\/[^/]+\/(approve|reject)$/.test(path) || path === "/api/decide/settings")) {
+    await refreshNav().catch(() => {});
+  }
   return data;
 }
 
@@ -65,75 +70,15 @@ export function hashParams() {
 }
 
 const ago = (s) => {
-  if (!s) return "never";
-  const sec = Math.round((Date.now() - new Date(s).getTime()) / 1000);
+  const time = Date.parse(s);
+  if (!Number.isFinite(time) || time <= 0) return "never";
+  const sec = Math.max(0, Math.round((Date.now() - time) / 1000));
   if (sec < 90) return `${sec}s ago`;
   if (sec < 5400) return `${Math.round(sec / 60)}m ago`;
   if (sec < 129600) return `${Math.round(sec / 3600)}h ago`;
   return `${Math.round(sec / 86400)}d ago`;
 };
 export { ago };
-
-async function overview(root) {
-  const o = await api("/api/overview");
-  const info = await api("/api/info");
-  const f = o.findings;
-  const stat = (n, label, cls, href) =>
-    el("a", { class: `card stat ${cls || ""}`, href: href || "#/findings" }, el("div", { class: "n" }, String(n)), el("div", { class: "l" }, label));
-
-  root.append(el("div", { class: "grid" },
-    stat(f.critical, "Critical", "critical", "#/findings?min=9"),
-    stat(f.high, "High", "high", "#/findings?min=7"),
-    stat(f.medium, "Medium", "medium", "#/findings?min=4"),
-    stat(f.kev, "Known exploited", "critical", "#/findings?kev=1"),
-    stat(f.exposed, "On listening ports", "high", "#/findings?exposed=1"),
-    stat(`${f.devices}/${o.devices}`, "Devices affected", "", "#/devices")));
-
-  const kinds = Object.entries(o.device_kinds).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${n} ${k}`).join(", ");
-  const roles = Object.entries(o.peers).map(([k, n]) => `${n} ${k}`).join(", ") || "none";
-  const intel = o.intel;
-  const refresh = el("button", {
-    onclick: async () => {
-      refresh.disabled = true;
-      await api("/api/intel/refresh", { method: "POST", body: {} });
-      refresh.textContent = "Refresh started";
-    },
-  }, "Refresh feeds now");
-
-  root.append(el("div", { class: "grid" },
-    el("div", { class: "card" }, el("h2", {}, "Inventory"),
-      el("p", {}, `${o.devices} devices`, kinds ? ` (${kinds})` : ""),
-      el("p", {}, `${o.agent_devices} with an agent`),
-      el("p", {}, `Enrolled peers: ${roles}`),
-      el("p", { class: "muted small" }, `${f.open} open findings in ${f.vulns} vulnerabilities`)),
-    el("div", { class: "card" }, el("h2", {}, "Threat feeds"),
-      intel.matchers.length === 0 && intel.feeds.length === 0
-        ? el("p", { class: "muted" }, "Disabled in the configuration.")
-        : [
-          el("p", {}, "Matchers: ", intel.matchers.join(", ") || "none"),
-          intel.feeds.map((fd) => el("p", {}, `${fd.name}: `,
-            fd.last_error ? el("span", { class: "error", title: fd.last_error }, "error") : `updated ${ago(fd.last_ok)}`)),
-          el("p", {}, `Last match ${ago(intel.last_match)}`, intel.queued ? ` · ${intel.queued} queued` : ""),
-          intel.last_error ? el("p", { class: "error small" }, intel.last_error) : "",
-          refresh,
-        ]),
-    el("div", { class: "card" }, el("h2", {}, "Server"),
-      el("p", { class: "muted small" }, "TLS fingerprint. Pin it in agents, scanners and actors:"),
-      el("p", { class: "mono" }, o.tls_fingerprint),
-      el("p", { class: "muted small" }, "Order signing public key (Ed25519):"),
-      el("p", { class: "mono" }, info.order_key),
-      el("p", { class: "muted small" }, "Order key SHA-256 fingerprint:"),
-      el("p", { class: "mono" }, info.order_key_fingerprint))));
-
-  root.append(el("div", { class: "card" }, el("h2", {}, "Recent events"),
-    o.events.length === 0 ? el("p", { class: "muted" }, "No events.") :
-      table([
-        { title: "Time", render: (e) => el("span", { class: "nowrap" }, fmtTime(e.at)) },
-        { title: "Type", key: "type" },
-        { title: "By", key: "actor" },
-        { title: "Summary", key: "summary" },
-      ], o.events), el("p", {}, el("a", { href: "#/events" }, "All events →"))));
-}
 
 async function events(root) {
     const ev = await api("/api/events");
@@ -150,7 +95,10 @@ async function events(root) {
 export function registerView(name, title, fn) {
   VIEWS[name] = fn;
   if (!$(`#nav a[data-view="${name}"]`)) {
-    $("#nav").append(el("a", { href: `#/${name}`, "data-view": name }, title));
+    $("#nav").append(el("a", { href: `#/${name}`, "data-view": name, "aria-label": title, title },
+      icon(name), el("span", { class: "nav-label" }, title),
+      ["findings", "devices", "actions"].includes(name) ? el("span", { class: `nav-count ${name === "actions" ? "pending-count" : ""}`, hidden: true }) : null,
+      name === "findings" ? el("span", { class: "kev-dot", hidden: true }) : null));
   }
 }
 
@@ -159,34 +107,113 @@ function currentView() {
   return v || "overview";
 }
 
+let authenticated = false;
+let navRequest = 0;
+let killSaving = false;
+let navTimer;
+
+// Fetch complete counts, independently of bounded proposal lists on pages.
+export async function refreshNav() {
+  if (!authenticated) return;
+  const request = ++navRequest;
+  const results = await Promise.allSettled([api("/api/overview"), api("/api/decide/settings"), api("/api/graph")]);
+  if (!authenticated || request !== navRequest) return;
+  const [overviewResult, settingsResult, graphResult] = results;
+  const o = overviewResult.status === "fulfilled" ? overviewResult.value : null;
+  const settings = settingsResult.status === "fulfilled" ? settingsResult.value : null;
+  const counts = { findings: o?.findings.open, devices: o?.devices, actions: settings?.stats?.pending };
+  for (const [name, count] of Object.entries(counts)) {
+    if (count == null) continue;
+    const a = $(`#nav a[data-view="${name}"]`);
+    const badge = $(".nav-count", a);
+    badge.textContent = count;
+    badge.hidden = false;
+    const title = `${name[0].toUpperCase() + name.slice(1)}, ${count}${name === "findings" ? " open" : name === "actions" ? " waiting" : ""}`;
+    a.setAttribute("aria-label", title);
+    a.title = title;
+  }
+  if (o) {
+    $(".kev-dot").hidden = !o.findings.kev;
+    updateReportStatus(o, graphResult.status === "fulfilled" ? graphResult.value : null);
+  }
+  if (settings && !killSaving) updateKillSwitch(settings.killswitch);
+  const failure = results.find((r) => r.status === "rejected");
+  $("#shell-error").textContent = failure ? `Status update failed: ${failure.reason.message}` : "";
+}
+
+export function updateReportStatus(o, graph) {
+  const status = $("#report-status");
+  if (graph) {
+    const times = graph.nodes.map((n) => Date.parse(n.last_seen)).filter((t) => Number.isFinite(t) && t > 0);
+    const last = times.length ? new Date(times.reduce((a, b) => Math.max(a, b), 0)).toISOString() : "";
+    status.dataset.report = last;
+  }
+  const last = status.dataset.report;
+  const intel = o.intel;
+  const feeds = intel.feeds || [];
+  const errors = feeds.some((f) => f.last_error) || intel.last_error;
+  const feedState = errors ? "feeds error" : !feeds.length ? "feeds disabled" : feeds.some((f) => ago(f.last_ok) === "never") ? "feeds waiting" : "feeds OK";
+  status.textContent = `Last report ${last ? ago(last) : "unknown"} · ${feedState}`;
+  status.title = [last ? `Last report: ${fmtTime(last)}` : "Report time is available on Overview", ...feeds.map((f) => `${f.name}: ${f.last_error || `updated ${ago(f.last_ok)}`}`)].join("\n");
+  status.classList.toggle("error", Boolean(errors));
+}
+
+function updateKillSwitch(on) {
+  const input = $("#kill-switch");
+  input.checked = on;
+  input.disabled = false;
+  $("#kill-state").textContent = on ? "New orders paused" : "Kill switch off";
+  const title = `Kill switch ${on ? "on: no new orders; reverts continue" : "off: actions enabled"}`;
+  input.setAttribute("aria-label", title);
+  input.parentElement.title = title;
+}
+
 async function render() {
+  if (!authenticated) return;
+  window.dispatchEvent(new Event("nn:before-render"));
   const name = currentView();
-  for (const a of document.querySelectorAll("#nav a")) a.classList.toggle("active", a.dataset.view === name);
-  const root = $("#view");
-  root.replaceChildren();
+  for (const a of document.querySelectorAll("#nav a")) {
+    const active = a.dataset.view === name;
+    a.classList.toggle("active", active);
+    if (active) a.setAttribute("aria-current", "page");
+    else a.removeAttribute("aria-current");
+  }
+  // Each render owns its root, so an older request cannot append to a newer page.
+  const root = el("div", { class: "page-content" });
+  $("#view").replaceChildren(root);
   const fn = VIEWS[name];
   if (!fn) {
     root.append(el("p", { class: "muted" }, "Unknown page."));
     return;
   }
-  try {
-    await fn(root, location.hash);
-  } catch (e) {
-    if (e.message !== "login required") root.append(el("p", { class: "error" }, e.message));
-  }
+  root.setAttribute("aria-busy", "true");
+  try { await fn(root, location.hash); }
+  catch (e) {
+    if (e.message !== "login required") root.append(el("p", { class: "error", role: "alert" }, e.message));
+  } finally { root.removeAttribute("aria-busy"); }
 }
 
 function showLogin() {
-  $("#top").hidden = true;
+  window.dispatchEvent(new Event("nn:before-render"));
+  authenticated = false;
+  ++navRequest;
+  clearInterval(navTimer);
+  $("#app").hidden = true;
   $("#view").replaceChildren();
   $("#login").hidden = false;
 }
 
 async function showApp(user) {
+  authenticated = true;
   $("#login").hidden = true;
-  $("#top").hidden = false;
+  $("#app").hidden = false;
   $("#who").textContent = user;
-  await render();
+  $("#user-initial").textContent = (user || "A").slice(0, 1).toUpperCase();
+  $("#user-initial").title = user;
+  $("#logout").title = `${user} · Log out`;
+  clearInterval(navTimer);
+  navTimer = setInterval(() => { refreshNav().catch(() => {}); }, 60000);
+  await Promise.all([render(), refreshNav()]);
 }
 
 $("#login-form").addEventListener("submit", async (ev) => {
@@ -197,9 +224,7 @@ $("#login-form").addEventListener("submit", async (ev) => {
     const r = await api("/api/login", { method: "POST", body: { user: f.get("user"), password: f.get("password") } });
     ev.target.password.value = "";
     await showApp(r.user);
-  } catch (e) {
-    $("#login-error").textContent = e.message;
-  }
+  } catch (e) { $("#login-error").textContent = e.message; }
 });
 
 $("#logout").addEventListener("click", async () => {
@@ -207,11 +232,75 @@ $("#logout").addEventListener("click", async () => {
   showLogin();
 });
 
-registerView("overview", "Overview", overview);
-
 // start is called by main.js after all page modules have registered.
 export function start() {
   registerView("events", "Events", events);
+  // Keep the reference navigation order, independent of module load order.
+  for (const name of ["overview", "map", "findings", "devices", "actions", "peers", "events"]) {
+    const link = $(`#nav a[data-view="${name}"]`);
+    if (link) $("#nav").append(link);
+  }
+  const media = matchMedia("(max-width: 759px)");
+  let preference = null;
+  try { preference = localStorage.getItem("nn.sidebar"); } catch { /* storage blocked */ }
+  let collapsed = preference === "collapsed" || (preference !== "expanded" && media.matches);
+  const applySidebar = () => {
+    $("#app").classList.toggle("sidebar-collapsed", collapsed);
+    const toggle = $("#sidebar-toggle");
+    toggle.setAttribute("aria-expanded", String(!collapsed));
+    toggle.setAttribute("aria-label", collapsed ? "Expand sidebar" : "Collapse sidebar");
+    toggle.title = `${collapsed ? "Expand" : "Collapse"} sidebar ([)`;
+  };
+  const toggleSidebar = () => {
+    collapsed = !collapsed;
+    preference = collapsed ? "collapsed" : "expanded";
+    try { localStorage.setItem("nn.sidebar", preference); } catch { /* storage blocked */ }
+    applySidebar();
+  };
+  $("#sidebar-toggle").append(icon("chevron"));
+  $("#sidebar-toggle").addEventListener("click", toggleSidebar);
+  media.addEventListener("change", () => { if (!preference) { collapsed = media.matches; applySidebar(); } });
+  applySidebar();
+  if (/Mac|iPhone|iPad/.test(navigator.platform)) $("#search-shortcut").textContent = "Cmd K";
+  document.addEventListener("keydown", (ev) => {
+    if (!authenticated) return;
+    if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "k") {
+      ev.preventDefault(); $("#global-search").focus();
+    } else if (ev.key === "[" && !ev.target.closest("input, textarea, select, [contenteditable]")) {
+      ev.preventDefault(); toggleSidebar();
+    }
+  });
+  $("#global-search-form").addEventListener("submit", (ev) => {
+    ev.preventDefault();
+    const q = $("#global-search").value.trim();
+    if (!q) return;
+    const page = /CVE-\d{4}-\d+/i.test(q) ? "findings" : "devices";
+    const hash = `#/${page}?${new URLSearchParams({ q })}`;
+    if (location.hash === hash) render();
+    else location.hash = hash;
+  });
+  $("#refresh").addEventListener("click", async () => {
+    const button = $("#refresh");
+    button.disabled = true;
+    try { await Promise.all([render(), refreshNav()]); }
+    finally { button.disabled = false; }
+  });
+  $("#kill-switch").addEventListener("change", async () => {
+    const input = $("#kill-switch");
+    const next = input.checked;
+    killSaving = true;
+    input.disabled = true;
+    ++navRequest;
+    try {
+      await api("/api/decide/settings", { method: "PUT", body: { killswitch: next } });
+      updateKillSwitch(next);
+      $("#shell-error").textContent = "";
+      if (currentView() === "actions" || currentView() === "overview") await render();
+    } catch (e) {
+      updateKillSwitch(!next);
+      $("#shell-error").textContent = e.message;
+    } finally { killSaving = false; input.disabled = false; }
+  });
   window.addEventListener("hashchange", render);
   api("/api/me").then((r) => showApp(r.user)).catch(() => showLogin());
 }

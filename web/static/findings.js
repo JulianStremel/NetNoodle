@@ -43,7 +43,8 @@ async function page(root) {
   const exposed = el("input", { type: "checkbox" });
   exposed.checked = params.get("exposed") === "1";
   const fixable = el("input", { type: "checkbox" });
-  const text = el("input", { type: "search", placeholder: "Filter by CVE, package, device …" });
+  const text = el("input", { type: "search", placeholder: "Filter by CVE, package, device …", "aria-label": "Filter findings" });
+  text.value = params.get("q") || "";
   const stateSel = el("select", {}, [["open", "Open"], ["resolved", "Resolved"]].map(([v, t]) => el("option", { value: v }, t)));
   stateSel.value = state;
   stateSel.addEventListener("change", () => {

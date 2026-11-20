@@ -28,15 +28,14 @@ export function cssVar(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
 
-export const dark = () => matchMedia("(prefers-color-scheme: dark)").matches;
+export const dark = () => true;
 
 // riskColor maps a risk 0-10 to a color: none, low, medium, high, critical.
+let riskPalette;
 export function riskColor(r) {
-  if (!r) return dark() ? "#3a4150" : "#c3cad6";
-  if (r >= 9) return dark() ? "#ff4d6d" : "#d61f45";
-  if (r >= 7) return dark() ? "#ff8c42" : "#e2620d";
-  if (r >= 4) return dark() ? "#ffd166" : "#c99400";
-  return dark() ? "#5cc97b" : "#2f9e5b";
+  // Read once: canvas render loops call this for every device and edge.
+  riskPalette ||= ["--muted", "--ok", "--warn", "--high", "--bad"].map(cssVar);
+  return riskPalette[!r ? 0 : r >= 9 ? 4 : r >= 7 ? 3 : r >= 4 ? 2 : 1];
 }
 
 // riskLabel is a word for a risk value (for text next to the color).
