@@ -51,3 +51,26 @@ func TestBuildGraph(t *testing.T) {
 		t.Fatalf("networks = %+v (link-local must be skipped)", g.Networks)
 	}
 }
+
+func TestBuildGraphManyGuests(t *testing.T) {
+	devs := []store.DeviceRow{{ID: 1, Name: "host", Kind: "host"}}
+	for i := int64(2); i <= 10001; i++ {
+		devs = append(devs, store.DeviceRow{ID: i, Kind: "container", ParentID: 1})
+	}
+	fs := []store.FindingRow{{Finding: store.Finding{DeviceID: 5000}, Score: 9.8}}
+	start := time.Now()
+	g := buildGraph(devs, fs, nil, time.Now())
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("10000 guests took %v", d)
+	}
+	total := 0
+	for _, n := range g.Nodes {
+		total += len(n.Related)
+		if n.ID != 5000 && n.RelatedRisk == 0 {
+			t.Fatalf("device %d does not see the risky sibling", n.ID)
+		}
+	}
+	if total > 10001*(2*maxRelated+1) {
+		t.Fatalf("related entries = %d", total)
+	}
+}

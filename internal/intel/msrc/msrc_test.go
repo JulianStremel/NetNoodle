@@ -550,3 +550,23 @@ func TestBackgroundFirstLoad(t *testing.T) {
 		t.Fatalf("after ready: %d hits, %v", len(hits), err)
 	}
 }
+
+func TestManyWindowsComponentsAreCapped(t *testing.T) {
+	a := fakeMSRC(t)
+	m := newTestMatcher(t, a.srv.URL+"/", 2)
+	var comps []proto.Component
+	for i := 0; i < 500; i++ {
+		comps = append(comps, windows(fmt.Sprintf("10.0.26100.%d", i), "client", "24H2"))
+	}
+	hits, err := m.Match(context.Background(), comps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, h := range hits {
+		seen[h.Component.PURL] = true
+	}
+	if len(seen) > maxComponents {
+		t.Fatalf("%d components matched, limit %d", len(seen), maxComponents)
+	}
+}

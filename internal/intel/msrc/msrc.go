@@ -27,7 +27,17 @@ const (
 	maxUpdates     = 4 << 20
 	maxFixes       = 500000
 	maxStringBytes = 512
+	// maxComponents is the number of distinct Windows builds matched per
+	// call. A host has one Windows; more are reports of a broken or hostile
+	// agent (security review 2026-11-20).
+	maxComponents = 8
+	// maxHits stops a match that would produce more findings than any
+	// real Windows build can have.
+	maxHits = 20000
 )
+
+// ErrTooManyHits is returned when one match exceeds maxHits.
+var ErrTooManyHits = errors.New("msrc: too many hits for one device")
 
 func init() { intel.Matchers.Register("msrc", New) }
 
@@ -281,10 +291,21 @@ func (f fix) applies(c component) bool {
 // After loading, matches read the current snapshot without network requests.
 func (m *Matcher) Match(ctx context.Context, comps []proto.Component) ([]intel.Hit, error) {
 	var items []component
+	seen := map[string]bool{}
 	for _, c := range comps {
-		if item, ok := windowsComponent(c); ok {
-			items = append(items, item)
+		item, ok := windowsComponent(c)
+		if !ok {
+			continue
 		}
+		key := item.build.String() + "|" + item.kind + "|" + strings.ToLower(item.release)
+		if seen[key] {
+			continue
+		}
+		if len(items) == maxComponents {
+			break
+		}
+		seen[key] = true
+		items = append(items, item)
 	}
 	if len(items) == 0 {
 		return nil, nil
@@ -346,6 +367,9 @@ func (m *Matcher) Match(ctx context.Context, comps []proto.Component) ([]intel.H
 				v.Refs = append(v.Refs, selected.url)
 			}
 			hits = append(hits, intel.Hit{Component: c.c, Vuln: v, Fixed: selected.build.String(), Confidence: proto.High})
+			if len(hits) > maxHits {
+				return nil, ErrTooManyHits
+			}
 		}
 	}
 	return hits, nil
@@ -433,6 +457,7 @@ func (m *Matcher) download(ctx context.Context) ([]record, error) {
 	})
 	seen := map[string]bool{}
 	docs := map[string]cachedDoc{}
+	var order []string // newest first; the newest document gives the title
 	loaded, fixes := 0, 0
 	for _, u := range updates.Value {
 		if _, err := time.Parse("2006-Jan", u.ID); err != nil || seen[u.ID] {
@@ -460,6 +485,7 @@ func (m *Matcher) download(ctx context.Context) ([]record, error) {
 			return nil, fmt.Errorf("msrc: more than %d fix entries", maxFixes)
 		}
 		docs[u.ID] = cd
+		order = append(order, u.ID)
 		loaded++
 		if loaded == m.months {
 			break
@@ -467,8 +493,8 @@ func (m *Matcher) download(ctx context.Context) ([]record, error) {
 	}
 	m.docs = docs // only the single load goroutine reaches this point
 	data := map[string]*record{}
-	for _, cd := range docs {
-		for id, r := range cd.recs {
+	for _, docID := range order {
+		for id, r := range docs[docID].recs {
 			merge(data, id, r)
 		}
 	}

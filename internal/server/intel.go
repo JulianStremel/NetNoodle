@@ -202,6 +202,10 @@ func (s *Server) matchWorker(ctx context.Context) {
 	}
 }
 
+// maxHitsPerDevice limits the findings of one matcher for one device. Real
+// devices have a few thousand at most; more comes from a hostile report.
+const maxHitsPerDevice = 50000
+
 // MatchDevice runs all matchers for one device and stores the findings.
 // A matcher that fails leaves the device's earlier findings unchanged.
 func (s *Server) MatchDevice(ctx context.Context, id int64) error {
@@ -217,6 +221,10 @@ func (s *Server) MatchDevice(ctx context.Context, id int64) error {
 		cancel()
 		if err != nil {
 			errs = append(errs, m.Name()+": "+err.Error())
+			continue
+		}
+		if len(hits) > maxHitsPerDevice {
+			errs = append(errs, fmt.Sprintf("%s: %d hits, more than %d; findings not changed", m.Name(), len(hits), maxHitsPerDevice))
 			continue
 		}
 		vulns := map[string]intel.Vuln{}

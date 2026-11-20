@@ -99,6 +99,12 @@ type devRow struct {
 	first, last               string
 }
 
+func (t *invTx) CountChildren(parent int64) (int, error) {
+	var n int
+	err := t.tx.QueryRowContext(t.ctx, `SELECT COUNT(*) FROM devices WHERE parent_id = ?`, parent).Scan(&n)
+	return n, err
+}
+
 func (t *invTx) ParentOf(id int64) (int64, error) {
 	r, err := t.row(id)
 	if err != nil {

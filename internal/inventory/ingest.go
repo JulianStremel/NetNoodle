@@ -13,6 +13,7 @@ package inventory
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"time"
 
@@ -37,6 +38,8 @@ type Tx interface {
 	Identifiers(deviceID int64) ([]proto.Identifier, error)
 	// ParentOf returns the parent of a device (0 if none).
 	ParentOf(deviceID int64) (int64, error)
+	// CountChildren returns the number of devices with this parent.
+	CountChildren(parentID int64) (int, error)
 	CreateDevice(d Device) (int64, error)
 	// UpdateDevice records a new sighting. It sets kind and name only if
 	// they are unknown or empty, merges attributes and sets the parent if
@@ -76,6 +79,9 @@ type Result struct {
 	New     []NewDevice `json:"new,omitempty"`
 	Merged  [][2]int64  `json:"merged,omitempty"` // [keep, drop]
 	Skipped int         `json:"skipped,omitempty"`
+	// Claimed are existing devices that an agent report took over (first
+	// report of an agent, or a container that matched a guest by MAC).
+	Claimed []int64 `json:"claimed,omitempty"`
 }
 
 // Ingest normalizes the observation and applies it in one transaction.
@@ -139,6 +145,10 @@ func (r *resolver) apply(e *proto.Entity, parentID int64) (int64, error) {
 	switch {
 	case r.agent != "" && parentID != 0:
 		dev, err = r.resolveAgentChild(e, parentID)
+		if errors.Is(err, errChildLimit) {
+			r.res.Skipped++
+			return 0, nil
+		}
 	case r.agent != "":
 		dev, err = r.resolveAgent(e)
 	default:

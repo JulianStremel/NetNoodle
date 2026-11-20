@@ -89,7 +89,12 @@ func (s *Server) pullDue(ctx context.Context, sem chan struct{}) {
 		}
 		select {
 		case sem <- struct{}{}:
-		case <-ctx.Done():
+		default:
+			// All slots are busy (slow agents). Try again at the next
+			// tick instead of blocking the scheduler.
+			s.pull.mu.Lock()
+			delete(s.pull.inflight, p.ID)
+			s.pull.mu.Unlock()
 			return
 		}
 		go func() {
@@ -199,7 +204,9 @@ func (s *Server) pairInfo(p store.PullPeer) pairInfo {
 	s.pull.mu.Unlock()
 	return pairInfo{
 		Peer: viewPull(p), Code: p.PairCode, Expires: p.PairExpires,
-		Command: "nn-agent pair --code " + p.PairCode + " --server-fingerprint " + fp + " --listen " + p.Address,
+		// The code goes in the environment, not on the command line, where
+		// other local users could read it from the process list.
+		Command: "NN_PAIR_CODE=" + p.PairCode + " nn-agent pair --server-fingerprint " + fp + " --listen " + p.Address,
 	}
 }
 

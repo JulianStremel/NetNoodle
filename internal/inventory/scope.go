@@ -37,6 +37,13 @@ const ContainerIDKind = "container.id"
 // MaxAgentChildren is the largest number of containers in one agent report.
 const MaxAgentChildren = 1000
 
+// MaxHostChildren is the largest number of devices under one host that
+// agent reports can create. Containers that are gone stay in the
+// inventory, so without this limit an agent could add devices without end.
+const MaxHostChildren = 2000
+
+var errChildLimit = errors.New("too many children on this host")
+
 func isAgentID(id proto.Identifier) bool {
 	n, ok := normalizeIdentifier(id)
 	return ok && (n.Kind == AgentKind || n.Kind == ChildKind)
@@ -180,8 +187,16 @@ func (r *resolver) resolveAgentChild(e *proto.Entity, parent int64) (int64, erro
 			}
 		}
 		if !owned {
+			r.res.Claimed = append(r.res.Claimed, cand)
 			return cand, nil
 		}
+	}
+	n, err := r.tx.CountChildren(parent)
+	if err != nil {
+		return 0, err
+	}
+	if n >= MaxHostChildren {
+		return 0, errChildLimit
 	}
 	return 0, nil
 }
@@ -218,6 +233,9 @@ func (r *resolver) resolveAgent(e *proto.Entity) (int64, error) {
 	for _, id := range e.Identifiers {
 		if id.Strength == proto.Strong && id.Kind != AgentKind {
 			if dev, ok, err := try(id); err != nil || ok {
+				if ok {
+					r.res.Claimed = append(r.res.Claimed, dev)
+				}
 				return dev, err
 			}
 		}
@@ -226,6 +244,9 @@ func (r *resolver) resolveAgent(e *proto.Entity) (int64, error) {
 		for _, id := range e.Identifiers {
 			if id.Kind == kind && id.Strength == proto.Weak {
 				if dev, ok, err := try(id); err != nil || ok {
+					if ok {
+						r.res.Claimed = append(r.res.Claimed, dev)
+					}
 					return dev, err
 				}
 			}

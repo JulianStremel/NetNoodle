@@ -94,7 +94,7 @@ func TestPullPairAndReport(t *testing.T) {
 	if code := doJSON(t, c, "POST", ts.URL+"/api/pull-peers", "", `{"name":"rproxy","address":"`+agent.addr()+`","interval":"1h"}`, &info); code != 200 {
 		t.Fatalf("create = %d", code)
 	}
-	if len(info.Code) != 32 || !strings.Contains(info.Command, "--server-fingerprint "+fp) {
+	if len(info.Code) != 32 || !strings.Contains(info.Command, "--server-fingerprint "+fp) || !strings.HasPrefix(info.Command, "NN_PAIR_CODE=") {
 		t.Fatalf("pair info = %+v", info)
 	}
 	ctx := context.Background()

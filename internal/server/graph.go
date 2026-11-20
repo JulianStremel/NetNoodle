@@ -68,6 +68,10 @@ type GraphNode struct {
 	LastSeen    time.Time   `json:"last_seen"`
 }
 
+// maxRelated limits the guests and the siblings listed per device (the
+// riskiest first). RelatedRisk always covers all of them.
+const maxRelated = 50
+
 // GraphNetwork is an address range with its devices.
 type GraphNetwork struct {
 	ID      string  `json:"id"` // CIDR
@@ -218,29 +222,63 @@ func buildGraph(devs []store.DeviceRow, fs []store.FindingRow, svcs []store.Devi
 		if len(n.Top) > 5 {
 			n.Top = n.Top[:5]
 		}
-		// Related: parent, children, siblings.
+	}
+	// Related: parent, children and the riskiest siblings. Children are
+	// sorted by risk once per host, so this stays linear in the number of
+	// devices (a host can have thousands of guests).
+	byRisk := func(ids []int64) []int64 {
+		out := append([]int64(nil), ids...)
+		sort.Slice(out, func(a, b int) bool {
+			ra, rb := g.Nodes[idx[out[a]]].Risk, g.Nodes[idx[out[b]]].Risk
+			if ra != rb {
+				return ra > rb
+			}
+			return out[a] < out[b]
+		})
+		return out
+	}
+	sortedKids := map[int64][]int64{}
+	for i := range g.Nodes {
+		if len(g.Nodes[i].Children) > 0 {
+			sortedKids[g.Nodes[i].ID] = byRisk(g.Nodes[i].Children)
+		}
+	}
+	for i := range g.Nodes {
+		n := &g.Nodes[i]
 		rel := map[int64]bool{}
-		for _, c := range n.Children {
+		kids := sortedKids[n.ID]
+		for j, c := range kids {
+			if j == maxRelated {
+				break
+			}
 			rel[c] = true
+		}
+		if len(kids) > 0 {
+			n.RelatedRisk = g.Nodes[idx[kids[0]]].Risk
 		}
 		if n.Parent != 0 {
 			rel[n.Parent] = true
-			for _, s := range g.Nodes[idx[n.Parent]].Children {
-				if s != n.ID {
-					rel[s] = true
+			p := g.Nodes[idx[n.Parent]]
+			n.RelatedRisk = max(n.RelatedRisk, p.Risk)
+			sib := 0
+			for _, s := range sortedKids[n.Parent] {
+				if s == n.ID {
+					continue
 				}
+				if sib == 0 {
+					n.RelatedRisk = max(n.RelatedRisk, g.Nodes[idx[s]].Risk)
+				}
+				if sib == maxRelated {
+					break
+				}
+				rel[s] = true
+				sib++
 			}
 		}
 		for id := range rel {
 			n.Related = append(n.Related, id)
 		}
 		sort.Slice(n.Related, func(a, b int) bool { return n.Related[a] < n.Related[b] })
-	}
-	for i := range g.Nodes {
-		n := &g.Nodes[i]
-		for _, id := range n.Related {
-			n.RelatedRisk = max(n.RelatedRisk, g.Nodes[idx[id]].Risk)
-		}
 	}
 	// Networks.
 	byNet := map[string]*GraphNetwork{}

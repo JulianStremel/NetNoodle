@@ -260,3 +260,29 @@ func TestAgentContainerChildren(t *testing.T) {
 		t.Fatal("source set an agent.child identifier")
 	}
 }
+
+func TestAgentChildrenTotalLimit(t *testing.T) {
+	if testing.Short() {
+		t.Skip("slow")
+	}
+	ts, c, pw := newTestServer(t)
+	post(t, c, ts.URL+"/api/login", "application/json", `{"user":"admin","password":"`+pw+`"}`)
+	anon := &http.Client{Transport: ts.Client().Transport}
+	tok := enrollPeer(t, c, anon, ts.URL, "agent", "host1")
+	report := func(from, n int) {
+		var kids []string
+		for i := from; i < from+n; i++ {
+			kids = append(kids, fmt.Sprintf(`{"kind":"container","identifiers":[{"kind":"container.id","value":"lxc/%d"}]}`, i))
+		}
+		body := `{"version":"v1","source":"x","observed_at":"2026-11-20T10:00:00Z","entities":[{"kind":"host","name":"host1","identifiers":[],"children":[` + strings.Join(kids, ",") + `]}]}`
+		if code := doJSON(t, anon, "POST", ts.URL+"/v1/observations", tok, body, nil); code != 200 {
+			t.Fatalf("report = %d", code)
+		}
+	}
+	report(0, 1000)
+	report(1000, 1000)
+	report(2000, 1000)
+	if n := len(devices(t, c, ts.URL)); n != 1+2000 {
+		t.Fatalf("devices = %d, want %d (host + limit)", n, 1+2000)
+	}
+}
