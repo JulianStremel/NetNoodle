@@ -112,6 +112,18 @@ idle → downloading → staged → swapped → healthy → idle
 - `docker compose down` stops; `docker compose down -v` also deletes the data volume.
 - The README lists every place where netnoodle keeps data.
 
+## 5a. Build targets
+
+| Program | Linux x86_64 | Linux aarch64 | Windows x86_64 | Windows ARM64 |
+|---|---|---|---|---|
+| `nn-agent`, `nn-agent-helper` (Rust; helper Linux only) | yes (musl, static) | yes (musl, static) | yes | yes |
+| `nn-actor` (Go) | yes | yes | yes | yes |
+| `nn-scan` (Go) | yes | yes | yes | yes |
+| `nn-host-updater` (Go) | yes | yes | — | — |
+| `nn-server` (Go, container) | image amd64 | image arm64 | — | — |
+
+Windows ARM64 of the Rust agent: the `ring` crate compiles C code and needs clang or the MSVC ARM64 build tools. The release CI builds it natively on a Windows ARM64 runner (or with clang on x86_64). The Go programs cross-compile without extra tools.
+
 ## 6. Order of work
 
 1. Versions everywhere; outdated peers in the web interface.
