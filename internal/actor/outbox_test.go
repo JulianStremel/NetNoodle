@@ -168,6 +168,11 @@ func TestRevertAllowAndRateExemption(t *testing.T) {
 	}
 	now := time.Now().UTC()
 	r := Runner{Name: "actor", Key: key.Public().(ed25519.PublicKey), Nonces: ns, Allow: rules, Backends: bs, MaxPerHour: 1, DryRun: true, Now: func() time.Time { return now }}
+	// Reverts are exempt only for a journaled forward order (security review 2026-11-20).
+	r.Journal = &Journal{}
+	if e := r.Journal.Put("fwd", JournalEntry{Backend: bs[0].Name(), Target: "aa:bb", Action: "isolate"}); e != nil {
+		t.Fatal(e)
+	}
 	for i, tc := range []struct {
 		revert bool
 		value  string
@@ -184,6 +189,9 @@ func TestRevertAllowAndRateExemption(t *testing.T) {
 			action = "unisolate"
 		}
 		o := proto.Order{Version: proto.Version, ID: string(rune('a' + i)), Nonce: string(rune('a' + i)), Actor: "actor", Action: action, Revert: tc.revert, NotAfter: now.Add(time.Minute), Targets: []proto.Identifier{{Kind: "mac", Value: tc.value, Strength: proto.Strong}}}
+		if tc.revert {
+			o.RevertOf = "fwd"
+		}
 		env, _ := orders.Sign(key, o)
 		res := r.Handle(context.Background(), env)
 		if res.Status != tc.want {

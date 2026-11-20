@@ -61,6 +61,9 @@ func New(name string, raw json.RawMessage) (intel.Enricher, error) {
 	if s.URL == "" {
 		s.URL = defaultURL
 	}
+	if err := tlspin.CheckURL(s.URL, false); err != nil {
+		return nil, fmt.Errorf("epss: %w", err)
+	}
 	return &enricher{name: name, url: s.URL, c: &http.Client{Timeout: 120 * time.Second, CheckRedirect: tlspin.HTTPSRedirects}}, nil
 }
 

@@ -215,6 +215,18 @@ func (s *Server) planOrders(ctx context.Context) error {
 				reason = q.Reason
 				p.TTL = q.TTL
 			}
+			if safe {
+				// An agent that took over this device recently decides what
+				// the device reports: never act on it automatically
+				// (security review 2026-11-20).
+				claims, err := s.st.RecentDeviceClaims(ctx, p.DeviceID, now.Add(-claimHold), now)
+				if err != nil {
+					return err
+				}
+				if len(claims) > 0 {
+					safe, reason = false, "an agent took over this device recently ("+claims[0].Agent+"); approve"
+				}
+			}
 			if !safe {
 				if reason == "" {
 					reason = "guards require approval"

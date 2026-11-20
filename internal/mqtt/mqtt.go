@@ -192,7 +192,11 @@ func (p *Publisher) Notify(_ context.Context, e notify.Event) error {
 	}
 	e.Fields = nil
 	if !p.s.EventDetails {
+		// Titles contain device names and vulnerability IDs of devices
+		// that are not tagged for MQTT: without event_details only a
+		// generic title is published (security review 2026-11-20).
 		e.Detail = ""
+		e.Title = genericTitle(e.Type)
 	}
 	if e.At.IsZero() {
 		e.At = time.Now().UTC()
@@ -441,4 +445,26 @@ func (p *Publisher) snapshot(ctx context.Context, c paho.Client, s Snapshot) boo
 		}
 	}
 	return true
+}
+
+// genericTitle is the event title without device or vulnerability names.
+func genericTitle(eventType string) string {
+	if t, ok := map[string]string{
+		"device.new":           "New device",
+		"device.claimed":       "Agent took over a device",
+		"device.merge_refused": "Devices not merged",
+		"finding.new":          "New vulnerability finding",
+		"proposal.pending":     "Decision needs approval",
+		"proposal.auto":        "Automatic action",
+		"order.failed":         "Action failed",
+		"order.done":           "Action done",
+		"order.uncertain":      "Action result uncertain",
+		"order.expired":        "Action expired",
+		"order.revert-blocked": "Revert blocked",
+		"update.available":     "Update available",
+		"killswitch.changed":   "Kill switch changed",
+	}[eventType]; ok {
+		return t
+	}
+	return eventType
 }

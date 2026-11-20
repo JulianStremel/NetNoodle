@@ -5,12 +5,15 @@ on:
   push:
     branches: [main, master]
   pull_request:
+  # The release workflow runs the same checks on the tag commit before it
+  # builds or signs anything.
+  workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

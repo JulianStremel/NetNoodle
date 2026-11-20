@@ -277,23 +277,34 @@ func (s *Source) Poll(ctx context.Context, emit func(proto.Observation) error) e
 		e := proto.Entity{Kind: proto.KindNetworkDevice, Name: short(name), Identifiers: []proto.Identifier{{Kind: "homeassistant.device", Value: s.name + "/" + d.ID, Strength: proto.Strong}}, Attributes: map[string]string{
 			"ha.manufacturer": short(d.Manufacturer), "ha.model": short(d.Model), "ha.sw_version": short(d.SW), "ha.hw_version": short(d.HW), "ha.area": short(d.Area),
 		}}
-		// Connections are what the device itself reports. A device with
-		// many MAC addresses (or a device that lies) must not connect many
-		// devices: above maxDeviceMACs, its MACs are not used as identifiers.
-		macs := 0
+		// Connections and tracker MACs are what the device (or Home
+		// Assistant) reports. A device with many MAC addresses (or one that
+		// lies) must not connect many devices: above maxDeviceMACs distinct
+		// MACs, none is used as an identifier (security review 2026-11-20).
+		var macs []string
 		for _, conn := range d.Connections {
 			if len(conn) == 2 && conn[0] == "mac" {
-				macs++
+				macs = append(macs, conn[1])
 			}
 		}
-		for _, conn := range d.Connections {
-			if len(conn) == 2 && conn[0] == "mac" && macs <= maxDeviceMACs {
-				addMAC(&e, conn[1])
+		for _, st := range trackers[d.ID] {
+			if st.MAC != "" {
+				macs = append(macs, st.MAC)
+			}
+		}
+		distinct := map[string]bool{}
+		for _, m := range macs {
+			if hw, err := net.ParseMAC(m); err == nil {
+				distinct[hw.String()] = true
+			}
+		}
+		if len(distinct) <= maxDeviceMACs {
+			for _, m := range macs {
+				addMAC(&e, m)
 			}
 		}
 		for _, st := range trackers[d.ID] {
 			addIP(&e, st.IP)
-			addMAC(&e, st.MAC)
 			if st.HostName != "" {
 				identifier(&e, "hostname", short(st.HostName), proto.Weak)
 			}

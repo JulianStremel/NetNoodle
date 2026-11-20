@@ -109,6 +109,10 @@ func (s *Server) evaluateFindings(ctx context.Context, fs []store.FindingRow, no
 	return nil
 }
 
+// claimHold is how long after an agent took over a device no action on it
+// is automatic.
+const claimHold = 30 * 24 * time.Hour
+
 // Serialize only evaluation and persistence, one finding at a time. Matchers,
 // graph construction and the rest of a re-evaluation run never hold this lock.
 func (s *Server) evaluateSituation(ctx context.Context, ds []decide.Decider, gs []decide.Guard, f store.FindingRow, situation decide.Situation, batch *proposalBatch) error {
@@ -165,6 +169,16 @@ func (s *Server) evaluateSituation(ctx context.Context, ds []decide.Decider, gs 
 	}
 	for _, value := range keptOpen {
 		p.Reason = strings.TrimPrefix(p.Reason+"; ports "+value+" kept open", "; ")
+	}
+	if p.Tier == decide.TierAuto {
+		claims, err := s.st.RecentDeviceClaims(ctx, f.DeviceID, s.now().Add(-claimHold), s.now())
+		if err != nil {
+			return err
+		}
+		if len(claims) > 0 {
+			p.Tier = decide.TierApprove
+			p.Reason = strings.TrimPrefix(p.Reason+"; an agent took over this device recently ("+claims[0].Agent+")", "; ")
+		}
 	}
 	state := p.Tier.String()
 	if p.Tier == decide.TierApprove {

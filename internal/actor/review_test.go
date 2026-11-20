@@ -47,6 +47,9 @@ func reviewRunner(t *testing.T) (*actor.Runner, func(string, string, bool, strin
 	return r, func(action, kind string, revert bool, target string) proto.OrderResult {
 		i++
 		o := proto.Order{Version: proto.Version, ID: fmt.Sprint(i), Actor: "actor", Action: action, Nonce: fmt.Sprint(i), NotAfter: time.Now().Add(time.Minute), Targets: []proto.Identifier{{Kind: kind, Value: target}}, Revert: revert}
+		if revert {
+			o.RevertOf = "1" // the first order of each test
+		}
 		env, e := orders.Sign(key, o)
 		if e != nil {
 			t.Fatal(e)
@@ -74,6 +77,17 @@ func TestRevertRateExemption(t *testing.T) {
 			}
 			if got := handle("unisolate", "agent", false, "web01"); got.Status != proto.OrderRejected || !strings.Contains(got.Message, "rate limit") {
 				t.Fatal(got)
+			}
+			// A revert without a journaled forward order is not exempt
+			// (security review 2026-11-20).
+			if got := handle("unisolate", "agent", true, "web01"); got.Status != proto.OrderRejected || !strings.Contains(got.Message, "rate limit") {
+				t.Fatal(got)
+			}
+			if r.Journal == nil {
+				r.Journal = &actor.Journal{}
+			}
+			if e := r.Journal.Put("1", actor.JournalEntry{Backend: b.Name(), Target: "web01", Action: "isolate"}); e != nil {
+				t.Fatal(e)
 			}
 			if got := handle("unisolate", "agent", true, "web01"); got.Status != proto.OrderDone {
 				t.Fatal(got)

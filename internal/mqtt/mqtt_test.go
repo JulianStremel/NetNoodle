@@ -330,7 +330,7 @@ func TestDiscoveryStatesEventsDebounceAndReconnect(t *testing.T) {
 	for _, m := range b.messages {
 		if m.topic == "netnoodle/event" {
 			var ev map[string]any
-			if json.Unmarshal(m.payload, &ev) != nil || len(ev) != 6 || ev["type"] != e.Type || ev["severity"] != e.Severity || ev["title"] != e.Title || ev["detail"] != "" /* details are off by default */ || ev["link"] != e.Link || ev["at"] == nil || m.retained {
+			if json.Unmarshal(m.payload, &ev) != nil || len(ev) != 6 || ev["type"] != e.Type || ev["severity"] != e.Severity || ev["title"] != "New vulnerability finding" /* generic without event_details */ || ev["detail"] != "" /* details are off by default */ || ev["link"] != e.Link || ev["at"] == nil || m.retained {
 				t.Errorf("event = %s", m.payload)
 			}
 		}
@@ -412,13 +412,13 @@ func TestSettingsAndBoundedQueue(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < queueSize+10; i++ {
-		p.Notify(context.Background(), notify.Event{Type: "device.new", Title: strconv.Itoa(i)})
+		p.Notify(context.Background(), notify.Event{Type: "device.new", Title: strconv.Itoa(i), At: time.Unix(int64(i), 0)})
 	}
 	if len(p.events) != queueSize || len(p.wake) != 1 {
 		t.Fatalf("queue lengths = %d, %d", len(p.events), len(p.wake))
 	}
-	if first := <-p.events; first.Title != "10" {
-		t.Errorf("oldest event = %s", first.Title)
+	if first := <-p.events; first.At.Unix() != 10 {
+		t.Errorf("oldest event = %v", first.At)
 	}
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {

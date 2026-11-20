@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -32,6 +31,9 @@ type Settings struct {
 	Types []string `json:"types,omitempty"`
 	// Format is "json" (the event as is, default) or "slack" ({"text": ...}).
 	Format string `json:"format,omitempty"`
+	// AllowHTTP permits a plain http URL to a host that is not loopback;
+	// events then cross the network in clear text.
+	AllowHTTP bool `json:"allow_insecure_http,omitempty"`
 }
 
 type hook struct {
@@ -46,8 +48,8 @@ func New(name string, raw json.RawMessage) (notify.Notifier, error) {
 	if err := registry.Decode(raw, &s); err != nil {
 		return nil, err
 	}
-	if !strings.HasPrefix(s.URL, "https://") && !strings.HasPrefix(s.URL, "http://") {
-		return nil, errors.New("url must start with http:// or https://")
+	if err := tlspin.CheckURL(s.URL, s.AllowHTTP); err != nil {
+		return nil, err
 	}
 	if s.Format == "" {
 		s.Format = "json"

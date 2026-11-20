@@ -45,6 +45,9 @@ type Settings struct {
 	FP         string   `json:"fingerprint,omitempty"`
 	Insecure   bool     `json:"insecure_skip_verify,omitempty"`
 	Sites      []string `json:"sites,omitempty"`
+	// AllowHTTP permits a plain http URL; the API key is then readable on
+	// the network.
+	AllowHTTP bool `json:"allow_insecure_http,omitempty"`
 }
 
 // Source is the UniFi source.
@@ -71,9 +74,8 @@ func New(name string, raw json.RawMessage) (source.Source, error) {
 	if s.URL == "" || s.APIKey == "" {
 		return nil, errors.New("url and api_key (or api_key_file) are required")
 	}
-	u, err := url.Parse(s.URL)
-	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
-		return nil, fmt.Errorf("bad url %q", s.URL)
+	if err := tlspin.CheckURL(s.URL, s.AllowHTTP); err != nil {
+		return nil, err
 	}
 	if s.APIPath == "" {
 		s.APIPath = "/proxy/network/integration/v1"

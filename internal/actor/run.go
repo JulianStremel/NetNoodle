@@ -209,7 +209,11 @@ func (r *Runner) Handle(ctx context.Context, env orders.Envelope) (res proto.Ord
 	if o.Revert && !validRevert {
 		return reject("invalid revert action")
 	}
-	exempt := o.Revert && validRevert
+	// Only a revert of a forward order that this actor applied (journal
+	// entry, not released) is exempt from the hourly limit. A signed
+	// "revert" without such an entry counts like any order (security
+	// review 2026-11-20).
+	exempt := o.Revert && validRevert && r.journaledForward(o)
 	keep := r.executed[:0]
 	for _, at := range r.executed {
 		if at.After(now.Add(-time.Hour)) {
@@ -382,4 +386,27 @@ func truncateMessage(s string) string {
 		n--
 	}
 	return s[:n]
+}
+
+// journaledForward reports whether o reverts a forward order with an
+// unreleased journal entry whose action has o.Action as revert action.
+func (r *Runner) journaledForward(o proto.Order) bool {
+	if r.Journal == nil || o.RevertOf == "" {
+		return false
+	}
+	entry, ok := r.Journal.Entries()[o.RevertOf]
+	if !ok || entry.Released {
+		return false
+	}
+	for _, b := range r.Backends {
+		if b.Name() != entry.Backend {
+			continue
+		}
+		for _, c := range b.Capabilities() {
+			if c.Action == entry.Action && c.RevertAction == o.Action {
+				return true
+			}
+		}
+	}
+	return false
 }

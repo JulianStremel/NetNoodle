@@ -183,6 +183,9 @@ func New(name string, raw json.RawMessage) (intel.Matcher, error) {
 	if s.URL == "" {
 		s.URL = defaultURL
 	}
+	if err := tlspin.CheckURL(s.URL, false); err != nil {
+		return nil, fmt.Errorf("msrc: %w", err)
+	}
 	if s.Months == 0 {
 		s.Months = 24
 	}

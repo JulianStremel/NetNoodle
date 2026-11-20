@@ -518,3 +518,35 @@ func TestPlannerDoesNotExecuteExpiredApprovalBeyondExpiryBatch(t *testing.T) {
 		t.Fatal(stats, e)
 	}
 }
+
+// TestPlannerNoAutoAfterClaim: after an agent took over a device, an
+// automatic proposal for it needs approval (security review 2026-11-20).
+func TestPlannerNoAutoAfterClaim(t *testing.T) {
+	ts, _, s, _ := setupOrders(t)
+	ctx := context.Background()
+	c, _ := enrollOrderActor(t, s, ts, "auto")
+	helloActor(t, c, logCaps(t))
+	dev := orderDevice(t, s)
+	if e := s.st.InventoryTx(ctx, func(tx inventory.Tx) error {
+		return tx.PutComponents(dev, "test", []proto.Component{{PURL: "pkg:generic/a@1", Name: "a", Version: "1"}}, true, s.now())
+	}); e != nil {
+		t.Fatal(e)
+	}
+	s.SetIntel([]intel.Matcher{&fakeMatcher{vulns: map[string][]intel.Vuln{"a": {{ID: "auto-v"}}}}}, nil)
+	if e := s.MatchDevice(ctx, dev); e != nil {
+		t.Fatal(e)
+	}
+	p, _, e := s.st.UpsertProposal(ctx, store.Proposal{DeviceID: dev, VulnID: "auto-v", PURL: "pkg:generic/a@1", Action: "isolate", State: "auto", Tier: "auto", TTL: 60, CreatedAt: s.now()})
+	if e != nil {
+		t.Fatal(e)
+	}
+	s.SetDecide(nil, nil)
+	if e = s.st.AddEvent(ctx, store.Event{Type: "device.claimed", At: s.now(), Actor: "rogue", Data: fmt.Sprintf(`{"device_id":%d}`, dev)}); e != nil {
+		t.Fatal(e)
+	}
+	plan(t, s)
+	got, _ := s.st.GetProposal(ctx, p.ID)
+	if got.State != "pending" || !strings.Contains(got.Reason, "took over") {
+		t.Fatal(got)
+	}
+}

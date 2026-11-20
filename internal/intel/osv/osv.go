@@ -77,6 +77,9 @@ func New(name string, raw json.RawMessage) (intel.Matcher, error) {
 	if err := registry.Decode(raw, &s); err != nil {
 		return nil, err
 	}
+	if err := tlspin.CheckURL(s.URL, false); err != nil {
+		return nil, fmt.Errorf("osv: %w", err)
+	}
 	ttl, err := time.ParseDuration(s.CacheTTL)
 	if err != nil || ttl <= 0 {
 		return nil, fmt.Errorf("osv: bad cache_ttl %q", s.CacheTTL)
