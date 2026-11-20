@@ -1,0 +1,11 @@
+[Unit]
+Description=Check netnoodle updates daily
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+Unit=nn-host-updater-check.service
+
+[Install]
+WantedBy=timers.target

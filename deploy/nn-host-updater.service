@@ -1,0 +1,24 @@
+[Unit]
+Description=Apply verified netnoodle host updates
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+# Docker socket access is root-equivalent. Keep it out of the server container.
+ExecStart=/usr/local/sbin/nn-host-updater run-once
+TimeoutStartSec=30min
+UMask=0022
+NoNewPrivileges=true
+PrivateTmp=true
+# The binary mode atomically replaces binary_path, which can be under /usr.
+# ProtectSystem=full would block that operation; other hardening stays enabled.
+ReadOnlyPaths=/etc/nn-host-updater
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

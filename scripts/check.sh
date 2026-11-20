@@ -17,7 +17,10 @@ go vet ./...
 echo "== go: test"
 go test ./...
 
-echo "== go: build (including nn-actor)"
+echo "== go: linux updater vet"
+GOOS=linux go vet ./cmd/nn-host-updater ./internal/updater
+
+echo "== go: build (including nn-actor and nn-host-updater)"
 mkdir -p bin
 exe=$(go env GOEXE)
 for d in cmd/*/; do

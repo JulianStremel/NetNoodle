@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch netnoodle host update requests
+
+[Path]
+PathExistsGlob=/var/lib/netnoodle/updater/requests/*.json
+Unit=nn-host-updater.service
+
+[Install]
+WantedBy=multi-user.target

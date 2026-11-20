@@ -14,6 +14,7 @@ import (
 
 // Config is the nn-server configuration file (JSON).
 type Config struct {
+	Update UpdateConfig `json:"update"`
 	// Listen is the HTTPS listen address. Default ":7443".
 	Listen string `json:"listen"`
 	// DataDir holds the database, TLS key and signing keys. Default "./data".
@@ -77,6 +78,7 @@ func DefaultConfig() Config {
 		DataDir:    "data",
 		Store:      registry.Spec{Type: "sqlite"},
 		SessionTTL: Duration{12 * time.Hour},
+		Update:     DefaultUpdateConfig(),
 
 		ObservationRetention: Duration{7 * 24 * time.Hour},
 	}
@@ -130,5 +132,8 @@ func LoadConfig(path string) (Config, error) {
 		c.SessionTTL.Duration = 12 * time.Hour
 	}
 	c.applyIntelDefaults()
+	if err := c.Update.Validate(); err != nil {
+		return c, fmt.Errorf("update: %w", err)
+	}
 	return c, nil
 }

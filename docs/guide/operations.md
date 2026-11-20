@@ -24,7 +24,40 @@ cosign verify ghcr.io/julianstremel/netnoodle-server:stable   --certificate-iden
 
 ## Update
 
-Server in Docker: `docker compose pull && docker compose up -d`. Updates from the web interface, with automatic backup and rollback, are planned (refer to [docs/design/lifecycle.md](../design/lifecycle.md)).
+Server in Docker, by hand: `docker compose pull && docker compose up -d`.
+
+### Update from the web interface (host updater)
+
+The server never gets the Docker socket. A small program on the host, `nn-host-updater`, does the update when the server asks for it (refer to [docs/design/lifecycle.md](../design/lifecycle.md), section 3a). It takes images only from the repository in its own configuration, checks the signature, refuses downgrades, makes a database backup, starts the new version, checks it, and goes back to the old version if something fails.
+
+1. Install the program and its directories (Linux with Docker Compose v2 and cosign):
+
+   ```sh
+   go build -trimpath -o bin/nn-host-updater ./cmd/nn-host-updater
+   sudo install -m 0755 bin/nn-host-updater /usr/local/sbin/nn-host-updater
+   sudo install -d -m 0755 /etc/nn-host-updater /var/lib/netnoodle/updater /var/lib/netnoodle/updater/status
+   sudo install -d -m 0700 /var/lib/netnoodle/updater/state
+   sudo install -d -o 65532 -g 65532 -m 0750 /var/lib/netnoodle/updater/requests
+   sudo install -m 0600 deploy/nn-host-updater.example.json /etc/nn-host-updater/config.json
+   sudoedit /etc/nn-host-updater/config.json   # compose file, image repository, cosign trust, server fingerprint
+   ```
+
+2. Turn on updates in the server configuration and recreate the server with `compose.yaml` (it mounts the shared directory):
+
+   ```json
+   { "update": { "enabled": true, "shared_dir": "/var/lib/netnoodle/updater", "channel": "stable", "auto": false, "window": "Sun 03:00-05:00" } }
+   ```
+
+3. Install and start the units:
+
+   ```sh
+   sudo install -m 0644 deploy/nn-host-updater.path deploy/nn-host-updater.service      deploy/nn-host-updater-check.service deploy/nn-host-updater-check.timer /etc/systemd/system/
+   sudo systemctl daemon-reload
+   sudo nn-host-updater check
+   sudo systemctl enable --now nn-host-updater.path nn-host-updater-check.timer
+   ```
+
+The **System** page then shows the version, the channel, an available update, **Update now** (your password is asked again), **Schedule for window**, the history of each step, and **Roll back** for the last update (7 days). The sidebar shows "Update available".
 
 ## Backup, restore and export
 

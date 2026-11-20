@@ -43,6 +43,7 @@ func lifecycle(ctx context.Context, command string, args []string) error {
 	file := flags.String("file", "", "backup file to restore")
 	out := flags.String("out", "", "destination .tar.gz archive (0600)")
 	dryRun := flags.Bool("dry-run", false, "verify restore without replacing the database")
+	jsonOutput := flags.Bool("json", false, "output backup path as JSON")
 	flags.Usage = func() {
 		fmt.Fprintf(flags.Output(), "nn-server %s [flags]\nRestore requires nn-server to be stopped and holds data_dir/nn-server.lock (released automatically after a crash). Export supports online SQLite snapshots.\n", command)
 		flags.PrintDefaults()
@@ -58,6 +59,9 @@ func lifecycle(ctx context.Context, command string, args []string) error {
 	}
 	if command == "export" && (*out == "" || *latest || *file != "" || *dryRun) {
 		return fmt.Errorf("export requires --out <file.tar.gz>")
+	}
+	if command == "backup" && (*out != "" || *latest || *file != "" || *dryRun) {
+		return fmt.Errorf("backup accepts only --config and --json")
 	}
 	cfg, err := server.LoadConfig(*config)
 	if err != nil {
@@ -114,6 +118,50 @@ func lifecycle(ctx context.Context, command string, args []string) error {
 	b, ok := st.(store.Backuper)
 	if !ok {
 		return fmt.Errorf("store does not support database export")
+	}
+	if command == "backup" {
+		dir, err := filepath.Abs(filepath.Join(cfg.DataDir, "backups"))
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			return err
+		}
+		if cfg.Store.Type == "" || cfg.Store.Type == "sqlite" {
+			database, e := sqlite.DatabasePath(cfg.DataDir, cfg.Store.Settings)
+			if e != nil {
+				return e
+			}
+			var size uint64
+			for _, p := range []string{database, database + "-wal"} {
+				i, e := os.Stat(p)
+				if os.IsNotExist(e) && p != database {
+					continue
+				}
+				if e != nil {
+					return e
+				}
+				size += uint64(i.Size())
+			}
+			available, e := backupFreeSpace(dir)
+			if e != nil {
+				return fmt.Errorf("cannot check backup space: %w", e)
+			}
+			if available < size*2 {
+				return fmt.Errorf("insufficient free space for update backup: need %d bytes, have %d", size*2, available)
+			}
+		}
+		// Updater backups use a separate prefix: migration rotation must not
+		// delete a retained rollback snapshot during subsequent updates.
+		path := filepath.Join(dir, "update-"+time.Now().UTC().Format("20060102T150405.000000000Z")+".db")
+		if err := b.Backup(ctx, path); err != nil {
+			return err
+		}
+		if *jsonOutput {
+			return json.NewEncoder(os.Stdout).Encode(map[string]string{"path": path})
+		}
+		fmt.Println(path)
+		return nil
 	}
 	return exportArchive(ctx, b, cfg.DataDir, *out)
 }

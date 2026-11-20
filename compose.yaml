@@ -10,13 +10,15 @@
 services:
   server:
     build: { context: ., target: server }
-    image: netnoodle/server
+    image: ${NN_SERVER_IMAGE:-ghcr.io/julianstremel/netnoodle-server:stable}
     restart: unless-stopped
     ports:
       - "7443:7443"
     volumes:
       - server-data:/var/lib/netnoodle/data
       - ./config:/etc/netnoodle:ro
+      # Host owns the parent, status/ and state/; UID 65532 owns requests/.
+      - ${NN_UPDATER_DIR:-/var/lib/netnoodle/updater}:/var/lib/netnoodle/updater
 
   scan:
     build: { context: ., target: scan }

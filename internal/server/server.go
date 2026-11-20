@@ -9,6 +9,7 @@ import (
 	"mime"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/JulianStremel/netnoodle/internal/mqtt"
@@ -19,6 +20,7 @@ import (
 
 // Server holds the HTTP handlers and their dependencies.
 type Server struct {
+	updateMu    sync.Mutex
 	cfg         Config
 	st          store.Store
 	log         *slog.Logger
@@ -81,6 +83,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/logout", s.handleLogout)
 	mux.HandleFunc("GET /api/me", requireUser(s.handleMe))
 	mux.HandleFunc("GET /api/info", requireUser(s.handleInfo))
+	mux.HandleFunc("GET /api/update", requireUser(s.handleUpdate))
+	mux.HandleFunc("POST /api/update", requireUser(s.handleRequestUpdate))
+	mux.HandleFunc("POST /api/update/rollback", requireUser(s.handleRollbackUpdate))
 	mux.HandleFunc("GET /api/overview", requireUser(s.handleOverview))
 	mux.HandleFunc("GET /api/findings", requireUser(s.handleFindings))
 	mux.HandleFunc("POST /api/intel/refresh", requireUser(s.handleIntelRefresh))
@@ -196,7 +201,7 @@ func readJSON(r *http.Request, v any) error {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "protocol": "v1"})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "protocol": version.Protocol, "version": version.Version})
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {

@@ -14,7 +14,7 @@ ARG NN_VERSION
 ARG TARGETOS=linux
 ARG TARGETARCH
 RUN apk add --no-cache git
-ENV CGO_ENABLED=0
+ENV CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
@@ -22,6 +22,7 @@ RUN version="${NN_VERSION:-$(git describe --tags --always --dirty 2>/dev/null ||
  && go build -trimpath -ldflags "-s -w -X github.com/JulianStremel/netnoodle/internal/version.Version=$version" -o /out/nn-server ./cmd/nn-server \
  && go build -trimpath -ldflags "-s -w -X github.com/JulianStremel/netnoodle/internal/version.Version=$version" -o /out/nn-scan ./cmd/nn-scan \
  && go build -trimpath -ldflags "-s -w -X github.com/JulianStremel/netnoodle/internal/version.Version=$version" -o /out/nn-actor ./cmd/nn-actor \
+ && go build -trimpath -ldflags "-s -w -X github.com/JulianStremel/netnoodle/internal/version.Version=$version" -o /out/nn-host-updater ./cmd/nn-host-updater \
  && mkdir -p /out/var/lib/netnoodle/data /out/var/lib/nn-scan /out/var/lib/nn-actor
 
 # nn-server: web UI and API on 7443. Data (database, TLS key) in /var/lib/netnoodle/data.
@@ -50,6 +51,10 @@ WORKDIR /var/lib/nn-actor
 VOLUME /var/lib/nn-actor
 ENTRYPOINT ["/usr/local/bin/nn-actor"]
 CMD ["run", "-config", "/etc/netnoodle/nn-actor.json"]
+
+# Export the host updater with --target host-updater --output bin/linux.
+FROM scratch AS host-updater
+COPY --from=build /out/nn-host-updater /nn-host-updater
 
 # nn-agent and nn-agent-helper: static Linux binaries (musl).
 # Export them with --output; this is not a service image.

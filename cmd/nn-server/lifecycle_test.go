@@ -53,6 +53,24 @@ func TestLifecycleLockAndRestoreCLI(t *testing.T) {
 	if err := lifecycle(ctx, "export", []string{"--out", filepath.Join(dir, "online.tar.gz"), "--config", config}); err != nil {
 		t.Fatal(err)
 	}
+	// The updater takes the same online snapshot without acquiring the running
+	// server's exclusive data lock. Its prefix survives migration rotation.
+	if err := lifecycle(ctx, "backup", []string{"--json", "--config", config}); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(backupDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "update-") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("online update backup missing")
+	}
 	lock.Close()
 	for _, args := range [][]string{{"--latest"}, {"--file", backup}, {"--latest", "--dry-run"}} {
 		args = append(args, "--config", config)

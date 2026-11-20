@@ -37,7 +37,7 @@ func main() {
 }
 
 func run() error {
-	if len(os.Args) > 1 && (os.Args[1] == "restore" || os.Args[1] == "export") {
+	if len(os.Args) > 1 && (os.Args[1] == "restore" || os.Args[1] == "export" || os.Args[1] == "backup") {
 		return lifecycle(context.Background(), os.Args[1], os.Args[2:])
 	}
 	if len(os.Args) > 1 && (os.Args[1] == "version" || os.Args[1] == "--version" || os.Args[1] == "-version") {
@@ -138,6 +138,7 @@ func run() error {
 	srv.SetPull(map[string]pull.Transport{"https": pullhttps.New(pullCert, pullFP)}, pullFP)
 	go srv.RunPull(ctx)
 	go srv.RunMaintenance(ctx, cfg.ObservationRetention.Duration)
+	go srv.RunUpdates(ctx)
 
 	hs := &http.Server{
 		Addr:              cfg.Listen,

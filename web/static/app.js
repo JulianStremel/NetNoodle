@@ -116,7 +116,7 @@ let navTimer;
 export async function refreshNav() {
   if (!authenticated) return;
   const request = ++navRequest;
-  const results = await Promise.allSettled([api("/api/overview"), api("/api/decide/settings"), api("/api/graph")]);
+  const results = await Promise.allSettled([api("/api/overview"), api("/api/decide/settings"), api("/api/graph"), api("/api/update")]);
   if (!authenticated || request !== navRequest) return;
   const [overviewResult, settingsResult, graphResult] = results;
   const o = overviewResult.status === "fulfilled" ? overviewResult.value : null;
@@ -137,6 +137,10 @@ export async function refreshNav() {
     updateReportStatus(o, graphResult.status === "fulfilled" ? graphResult.value : null);
   }
   if (settings && !killSaving) updateKillSwitch(settings.killswitch);
+  const update = results[3];
+  let pill = $("#update-available");
+  if (!pill) { pill = el("a", { id: "update-available", href: "#/system", class: "update-pill", hidden: true }, "Update available"); $(".sidebar-bottom").append(pill); }
+  pill.hidden = update.status !== "fulfilled" || !update.value.newer;
   const failure = results.find((r) => r.status === "rejected");
   $("#shell-error").textContent = failure ? `Status update failed: ${failure.reason.message}` : "";
 }
@@ -241,7 +245,7 @@ $("#logout").addEventListener("click", async () => {
 export function start() {
   registerView("events", "Events", events);
   // Keep the reference navigation order, independent of module load order.
-  for (const name of ["overview", "map", "findings", "devices", "actions", "peers", "events"]) {
+  for (const name of ["overview", "map", "findings", "devices", "actions", "peers", "events", "system"]) {
     const link = $(`#nav a[data-view="${name}"]`);
     if (link) $("#nav").append(link);
   }
