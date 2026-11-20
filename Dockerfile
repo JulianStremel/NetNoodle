@@ -8,7 +8,7 @@
 
 # The Go stage runs on the build machine and cross-compiles for the target
 # platform (no emulation for multi-arch images: docker buildx --platform ...).
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS build
 WORKDIR /src
 ARG NN_VERSION
 ARG TARGETOS=linux
