@@ -1,0 +1,57 @@
+/* City visualization (web/static/viz/city.js). */
+.city { position: absolute; inset: 0; overflow: hidden; font-size: 13px; }
+.city-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; outline: none; }
+.city-canvas.is-hover { cursor: pointer; }
+.city-canvas.is-drag { cursor: grabbing; }
+.city-canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
+
+.city-bar { position: absolute; top: 10px; left: 10px; right: 10px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; pointer-events: none; }
+.city-bar.with-panel { right: 330px; }
+.city-bar > * { pointer-events: auto; }
+.city-search { width: 15rem; max-width: 100%; padding: 5px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--fg); font: inherit; }
+.city-found { color: var(--fg); background: var(--card); border-radius: 6px; padding: 1px 6px; font-size: 12px; }
+.city-found:empty { display: none; }
+.city-btn { background: var(--card); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 4px 10px; cursor: pointer; font: inherit; line-height: 1.3; }
+.city-btn:hover { border-color: var(--accent); }
+.city-btn[aria-pressed="true"], .city-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+.city-panel { position: absolute; top: 10px; right: 10px; bottom: 10px; width: 310px; overflow: auto; background: color-mix(in srgb, var(--card) 95%, transparent); color: var(--fg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; box-shadow: 0 6px 24px rgba(0, 0, 0, .18); }
+.city-panel h3 { margin: 0 0 .25rem; font-size: 16px; word-break: break-word; }
+.city-panel h4 { margin: .9rem 0 .3rem; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.city-panel p { margin: .25rem 0; }
+.city-panel ul { list-style: none; margin: 0; padding: 0; }
+.city-panel li { padding: .3rem 0; border-top: 1px solid var(--line); }
+.city-panel li:first-child { border-top: 0; }
+.city-list { display: flex; flex-direction: column; gap: 2px; }
+.city-row { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; background: transparent; color: var(--fg); border: 1px solid transparent; border-radius: 6px; padding: 4px 6px; cursor: pointer; font: inherit; }
+.city-row:hover, .city-row:focus-visible { border-color: var(--line); background: var(--bg); }
+.city-row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.city-row-risk { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.city-actions { display: flex; gap: 6px; flex-wrap: wrap; margin: .5rem 0; }
+.city-risk { font-weight: 600; }
+.city-chip { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: -1px; border: 1px solid rgba(0, 0, 0, .25); flex: none; }
+.city-kev { display: inline-block; margin-left: 6px; padding: 0 5px; border-radius: 4px; background: #d61f45; color: #fff; font-size: 11px; font-weight: 700; letter-spacing: .03em; }
+.city-tag { display: inline-block; margin-left: 6px; padding: 0 5px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); font-size: 11px; }
+.city-warn { color: var(--warn); }
+.city-mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; word-break: break-all; }
+.city-small { font-size: 12px; }
+
+.city-tip { position: absolute; z-index: 3; pointer-events: none; max-width: 300px; background: var(--card); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; box-shadow: 0 6px 20px rgba(0, 0, 0, .22); font-size: 12px; line-height: 1.45; }
+.city-tip-title { font-weight: 700; font-size: 13px; }
+
+.city-legend { position: absolute; left: 10px; bottom: 10px; max-width: 300px; max-height: calc(100% - 70px); overflow: auto; background: color-mix(in srgb, var(--card) 94%, transparent); color: var(--fg); border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; font-size: 12px; }
+.city-legend summary { cursor: pointer; font-weight: 600; }
+.city-legend-title { margin-top: 6px; font-weight: 600; }
+.city-swatches { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 4px 0 6px; }
+.city-swatch { display: inline-flex; align-items: center; gap: 4px; }
+.city-legend-item { display: flex; align-items: center; gap: 8px; }
+.city-mini { width: 42px; height: 42px; flex: none; }
+
+.city-hint { position: absolute; right: 12px; bottom: 8px; font-size: 11px; pointer-events: none; }
+.city-bar.with-panel ~ .city-hint { right: 335px; }
+
+@media (max-width: 760px) {
+  .city-panel { top: auto; left: 10px; width: auto; height: 45%; }
+  .city-bar.with-panel { right: 10px; }
+  .city-hint { display: none; }
+}

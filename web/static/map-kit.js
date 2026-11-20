@@ -75,3 +75,10 @@ export function loadCSS(path) {
     document.head.append(el("link", { rel: "stylesheet", href }));
   }
 }
+
+// fill replaces the children of node. It skips null, undefined and false,
+// which replaceChildren would insert as text, and flattens arrays.
+export function fill(node, ...children) {
+  node.replaceChildren(...children.flat(Infinity).filter((c) => c !== null && c !== undefined && c !== false));
+  return node;
+}

@@ -137,3 +137,5 @@ form .grid { margin-bottom: .75rem; }
 .viz-tab[aria-selected="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
 .viz-desc { margin: .25rem 0 .5rem; min-height: 1.2em; }
 .viz-stage { position: relative; width: 100%; height: calc(100vh - 150px); min-height: 480px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+/* The Map page uses the full window width. */
+main:has(.viz-stage) { max-width: none; }
