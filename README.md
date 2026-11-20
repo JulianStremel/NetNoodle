@@ -214,6 +214,9 @@ Limits:
 
 - Stopped containers are not read.
 - Packages of RPM-based containers are not read (only the operating system).
+- Files on another mount than the container's root (for example a volume at `/var`) are not read. A container could use such a mount to point at files of the host.
+- Rootless containers (in a user's systemd tree) are not reported.
+- MAC addresses come only from the Proxmox configuration (`/etc/pve/lxc/<id>.conf`), never from files in the container. Then a container cannot claim another guest.
 - The ports of a container show the program name, but not the package of the program.
 - Virtual machines (QEMU) are not read from the host. Install the agent in the virtual machine.
 

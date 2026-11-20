@@ -9,7 +9,7 @@ lxc/web-01.test:1	8:cpu,cpuacct:/lxc/web-01.test:1
 -	0::/lxc.monitor.101/lxc/101
 docker/abcdef012345	0::/system.slice/docker-abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789.scope
 docker/abcdef012345	9:memory:/docker/abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
-podman/012345abcdef	0::/user.slice/user-1000.slice/user@1000.service/libpod-012345abcdef6789.scope
+-	0::/user.slice/user-1000.slice/user@1000.service/libpod-012345abcdef6789.scope
 podman/012345abcdef	7:cpu:/libpod_parent/012345abcdef6789
 -	0::/system.slice/cri-containerd-abcdef0123456789.scope
 -	0::/system.slice/crio-abcdef0123456789.scope

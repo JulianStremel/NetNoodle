@@ -9,6 +9,7 @@ StandardInput=socket
 StandardOutput=socket
 StandardError=journal
 RuntimeMaxSec=120
+MemoryMax=1G
 
 DynamicUser=yes
 AmbientCapabilities=CAP_SYS_PTRACE CAP_DAC_READ_SEARCH

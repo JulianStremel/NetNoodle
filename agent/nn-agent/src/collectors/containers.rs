@@ -8,6 +8,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 const MAX_CONTAINERS: usize = 1000;
+/// Packages kept per container (a real system has a few thousand).
+const MAX_PACKAGES: usize = 100_000;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ContainerReport {
@@ -45,10 +47,15 @@ fn container_id(cgroups: &str) -> Option<String> {
             continue;
         };
         let parts: Vec<_> = path.split('/').collect();
-        if parts
-            .iter()
-            .any(|p| *p == "lxc.monitor" || p.starts_with("lxc.monitor."))
-        {
+        // Users can name their own scopes (systemd-run --user --scope
+        // --unit=docker-<id>). Container markers inside a user tree are not
+        // trusted; rootless containers are not reported.
+        if parts.iter().any(|p| {
+            *p == "lxc.monitor"
+                || p.starts_with("lxc.monitor.")
+                || *p == "user.slice"
+                || p.starts_with("user@")
+        }) {
             continue;
         }
         for (i, part) in parts.iter().enumerate() {
@@ -139,6 +146,41 @@ fn if_inet6(s: &str) -> BTreeMap<String, Vec<String>> {
     out
 }
 
+/// Parses a Proxmox LXC config (/etc/pve/lxc/<vmid>.conf): the host name
+/// and the MAC of each network interface (`netN: name=eth0,...,hwaddr=..`).
+/// Only the current config is read, not snapshot sections.
+fn parse_pve_config(s: &str) -> (String, Vec<(String, String)>) {
+    let mut name = String::new();
+    let mut macs = Vec::new();
+    for line in s.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            break; // snapshot or pending sections follow
+        }
+        let Some((k, v)) = line.split_once(':') else {
+            continue;
+        };
+        let (k, v) = (k.trim(), v.trim());
+        if k == "hostname" {
+            name = v.chars().take(253).collect();
+        } else if k.starts_with("net") && k[3..].bytes().all(|b| b.is_ascii_digit()) {
+            let mut ifname = String::new();
+            let mut mac = String::new();
+            for kv in v.split(',') {
+                match kv.split_once('=') {
+                    Some(("name", n)) => ifname = n.chars().take(15).collect(),
+                    Some(("hwaddr", m)) if m.len() == 17 => mac = m.to_ascii_lowercase(),
+                    _ => {}
+                }
+            }
+            if !ifname.is_empty() && !mac.is_empty() {
+                macs.push((ifname, mac));
+            }
+        }
+    }
+    (name, macs)
+}
+
 fn packages(
     dpkg_status: Option<&str>,
     apk_installed: Option<&str>,
@@ -147,7 +189,9 @@ fn packages(
     let distro = util::distro(osr);
     if let Some(status) = dpkg_status {
         let ns = util::namespace(osr, "debian");
-        return dpkg::parse_status(status)
+        let mut pkgs = dpkg::parse_status(status);
+        pkgs.truncate(MAX_PACKAGES);
+        return pkgs
             .iter()
             .map(|p| dpkg::component(p, &ns, &distro))
             .collect();
@@ -155,8 +199,17 @@ fn packages(
     // apk::component is private. Keep its PURL qualifiers and origin semantics here.
     apk_installed
         .map(|db| {
-            apk::parse_installed(db)
-                .iter()
+            // Drop the file lists (F:, R:) before parsing: the container
+            // controls this file, and the parser would keep one string per
+            // file, which multiplies the memory use.
+            let meta: String = db
+                .lines()
+                .filter(|l| !l.starts_with("F:") && !l.starts_with("R:"))
+                .flat_map(|l| [l, "\n"])
+                .collect();
+            let mut pkgs = apk::parse_installed(&meta);
+            pkgs.truncate(MAX_PACKAGES);
+            pkgs.iter()
                 .map(|p| {
                     let upstream = if p.origin != p.name {
                         p.origin.as_str()
@@ -244,6 +297,34 @@ fn contribution(reports: Vec<ContainerReport>) -> crate::collector::Contribution
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn proxmox_config() {
+        let conf = "arch: amd64
+hostname: dns01
+net0: name=eth0,bridge=vmbr0,hwaddr=BC:24:11:AA:BB:CC,ip=dhcp,type=veth
+net1: name=eth1,bridge=vmbr1
+
+[snap1]
+hostname: old
+net0: name=eth0,hwaddr=BC:24:11:00:00:01
+";
+        let (name, macs) = parse_pve_config(conf);
+        assert_eq!(name, "dns01");
+        assert_eq!(
+            macs,
+            vec![("eth0".to_string(), "bc:24:11:aa:bb:cc".to_string())]
+        );
+    }
+
+    #[test]
+    fn user_scopes_are_not_containers() {
+        assert_eq!(
+            container_id("0::/user.slice/user-1000.slice/user@1000.service/app.slice/docker-0123456789abcdef.scope
+"),
+            None
+        );
+    }
 
     #[test]
     fn cgroup_forms() {
@@ -515,7 +596,11 @@ mod linux {
         let how = OpenHow {
             flags: (libc::O_RDONLY | libc::O_NONBLOCK | libc::O_CLOEXEC) as u64,
             mode: 0,
-            resolve: 0x10 | 0x02, // RESOLVE_IN_ROOT | RESOLVE_NO_MAGICLINKS
+            // RESOLVE_IN_ROOT | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_XDEV: stay
+            // inside the container root and its own mount. A bind mount of
+            // a host directory (or Docker's bind-mounted /etc/hostname) is
+            // refused with EXDEV, so a link cannot reach host files.
+            resolve: 0x10 | 0x02 | 0x01,
         };
         // SAFETY: valid dirfd and NUL-terminated path; how matches the Linux UAPI.
         let fd = unsafe {
@@ -532,6 +617,21 @@ mod linux {
         }
         // SAFETY: syscall returned a new descriptor, exclusively owned here.
         Ok(unsafe { File::from_raw_fd(fd as libc::c_int) })
+    }
+
+    /// Reads the Proxmox config of an LXC container from the HOST (trusted,
+    /// unlike files in the container). None if this is not a Proxmox host.
+    fn pve_config(vmid: &str) -> Option<(String, Vec<(String, String)>)> {
+        if !vmid.bytes().all(|b| b.is_ascii_digit()) || vmid.is_empty() || vmid.len() > 10 {
+            return None;
+        }
+        let path = format!("/etc/pve/lxc/{vmid}.conf");
+        let meta = std::fs::metadata(&path).ok()?;
+        if !meta.is_file() || meta.len() > 1 << 20 {
+            return None;
+        }
+        let s = std::fs::read_to_string(&path).ok()?;
+        Some(super::parse_pve_config(&s))
     }
 
     fn read_safe(root: &File, path: &str, cap: usize, deadline: Instant) -> io::Result<String> {
@@ -585,6 +685,14 @@ mod linux {
         match read_safe(root, path, cap, deadline) {
             Ok(s) => Some(s),
             Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+            // Docker bind-mounts /etc/hostname; a volume can hold /var. Files
+            // on another mount are not read (RESOLVE_NO_XDEV).
+            Err(e) if e.raw_os_error() == Some(libc::EXDEV) => {
+                if path != "/etc/hostname" {
+                    errors.push(format!("{path}: on another mount (volume), not read"));
+                }
+                None
+            }
             Err(e) => {
                 errors.push(format!("{path}: {e}"));
                 None
@@ -722,7 +830,6 @@ mod linux {
     }
 
     fn network(
-        root: &File,
         proc: &File,
         id: &str,
         pids: &[u32],
@@ -746,18 +853,15 @@ mod linux {
                 socks.extend(sockets::parse_table(&s, proto));
             }
         }
-        let eph = optional(
-            root,
-            "/proc/sys/net/ipv4/ip_local_port_range",
-            SMALL_CAP,
-            deadline,
-            &mut report.errors,
-        )
-        .and_then(|s| {
-            let mut it = s.split_whitespace();
-            Some((it.next()?.parse().ok()?, it.next()?.parse().ok()?))
-        })
-        .unwrap_or((32768, 60999));
+        // The host's range: the container's /proc is another mount, which
+        // the confined reader refuses on purpose.
+        let eph = std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range")
+            .ok()
+            .and_then(|s| {
+                let mut it = s.split_whitespace();
+                Some((it.next()?.parse().ok()?, it.next()?.parse().ok()?))
+            })
+            .unwrap_or((32768, 60999));
         let socks = sockets::dedupe(socks, eph);
         let want: BTreeSet<_> = socks.iter().map(|s| s.inode).collect();
         let mut owners = BTreeMap::new();
@@ -818,16 +922,9 @@ mod linux {
                 if name == "lo" || name.contains('/') || name == "." || name == ".." {
                     continue;
                 }
-                let mac = optional(
-                    root,
-                    &format!("/sys/class/net/{name}/address"),
-                    4096,
-                    deadline,
-                    &mut report.errors,
-                )
-                .unwrap_or_default()
-                .trim()
-                .to_string();
+                // No MAC from the container's own /sys: the container
+                // controls it and could name the MAC of another guest.
+                let mac = String::new();
                 interfaces.insert(
                     name.into(),
                     Interface {
@@ -914,6 +1011,8 @@ mod linux {
                 r.attributes.insert(attr.into(), value.clone());
             }
         }
+        // The container controls its own files, so its hostname is only a
+        // label. Proxmox containers get name and MACs from the host config.
         r.name = optional(&root, "/etc/hostname", SMALL_CAP, deadline, &mut r.errors)
             .unwrap_or_default()
             .trim()
@@ -966,12 +1065,29 @@ mod linux {
                 .push("rpm database not read (no rpm parser)".into());
         }
         let id = r.id.clone();
-        if let Err(e) = network(&root, &proc, &id, &c.pids, &mut r, deadline) {
+        if let Err(e) = network(&proc, &id, &c.pids, &mut r, deadline) {
             r.errors.push(e.to_string());
         }
         // A process exiting/moving cgroups during collection cannot report stale data.
         if !belongs(&proc, &r.id, Instant::now() + Duration::from_millis(100)) {
             return None;
+        }
+        if let Some(vmid) = id.strip_prefix("lxc/") {
+            if let Some((name, macs)) = pve_config(vmid) {
+                if !name.is_empty() {
+                    r.name = name;
+                }
+                for (ifname, mac) in macs {
+                    match r.interfaces.iter_mut().find(|i| i.name == ifname) {
+                        Some(i) => i.mac = mac,
+                        None => r.interfaces.push(Interface {
+                            name: ifname,
+                            mac,
+                            ..Default::default()
+                        }),
+                    }
+                }
+            }
         }
         Some(r)
     }
@@ -1005,6 +1121,17 @@ mod linux {
             .map_err(|e| e.to_string())?;
         let mut out = vec![b'['];
         let mut first = true;
+        // Start at a different container each minute, so one container
+        // that always stalls the helper cannot hide the ones after it.
+        let mut candidates: Vec<_> = candidates.into_iter().collect();
+        if !candidates.is_empty() {
+            let minute = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() / 60)
+                .unwrap_or(0) as usize;
+            let n = candidates.len();
+            candidates.rotate_left(minute % n);
+        }
         for (id, c) in candidates {
             if Instant::now() >= deadline {
                 break;
@@ -1155,16 +1282,19 @@ mod linux {
                 io::ErrorKind::TimedOut
             );
             let host_root = directory(Path::new("/")).unwrap();
-            assert_eq!(
-                read_safe(
-                    &host_root,
-                    &format!("/proc/self/fd/{}", root.as_raw_fd()),
-                    SMALL_CAP,
-                    deadline
-                )
-                .unwrap_err()
-                .raw_os_error(),
-                Some(libc::ELOOP)
+            // Refused either as a magic link (ELOOP) or, with
+            // RESOLVE_NO_XDEV, already when it crosses into /proc (EXDEV).
+            let err = read_safe(
+                &host_root,
+                &format!("/proc/self/fd/{}", root.as_raw_fd()),
+                SMALL_CAP,
+                deadline,
+            )
+            .unwrap_err()
+            .raw_os_error();
+            assert!(
+                matches!(err, Some(libc::ELOOP) | Some(libc::EXDEV)),
+                "{err:?}"
             );
         }
 
