@@ -132,8 +132,12 @@ func TestExecute(t *testing.T) {
 			if err != nil || msg != tc.message {
 				t.Fatalf("message=%q err=%v", msg, err)
 			}
-			if f.deviceCalls.Load() != 1 || f.postCalls.Load() != 1 || f.userCalls.Load() != 1 {
-				t.Fatal("expected infrastructure check, command, and verification")
+			wantDevice := int64(1) // unblocking skips the infrastructure check
+			if tc.action == "unisolate" {
+				wantDevice = 0
+			}
+			if int64(f.deviceCalls.Load()) != wantDevice || f.postCalls.Load() != 1 || f.userCalls.Load() != 1 {
+				t.Fatal("expected infrastructure check (block only), command, and verification")
 			}
 		})
 	}
@@ -211,7 +215,8 @@ func TestUnknownClient(t *testing.T) {
 
 func TestProtectedTargets(t *testing.T) {
 	for _, protection := range []string{"never_block", "adopted device"} {
-		for _, action := range []string{"isolate", "unisolate"} {
+		// Only blocking is restricted; unblocking a protected MAC must work.
+		for _, action := range []string{"isolate"} {
 			t.Run(protection+"/"+action, func(t *testing.T) {
 				f := newFixture()
 				if protection == "adopted device" {
@@ -416,5 +421,16 @@ func TestTLSAndNoRedirects(t *testing.T) {
 	b = build(t, s)
 	if _, err := b.Execute(context.Background(), order("isolate", testMAC)); err == nil || !strings.Contains(err.Error(), "HTTP 302") {
 		t.Fatalf("insecure opt-in error=%v", err)
+	}
+}
+
+func TestUnblockProtectedTargetAllowed(t *testing.T) {
+	f := newFixture()
+	f.command, f.users = "unblock-sta", `{"data":[{"blocked":false}]}`
+	s := serverSettings(f.serve(t))
+	s.NeverBlock = []string{testMAC}
+	b := build(t, s)
+	if _, err := b.Execute(context.Background(), order("unisolate", testMAC)); err != nil {
+		t.Fatalf("unblock of a never_block MAC refused: %v", err)
 	}
 }
