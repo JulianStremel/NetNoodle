@@ -19,7 +19,7 @@ ureq.workspace = true
 rustls.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
-nix = { version = "0.29", features = ["net"] }
+nix = { version = "0.32", features = ["net"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
