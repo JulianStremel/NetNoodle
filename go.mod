@@ -4,10 +4,10 @@ go 1.27.0
 
 require (
 	github.com/coder/websocket v1.8.15
-	github.com/eclipse/paho.mqtt.golang v1.5.1
+	github.com/eclipse/paho.mqtt.golang v1.5.2
 	golang.org/x/crypto v0.59.0
 	golang.org/x/sys v0.50.0
-	modernc.org/sqlite v1.62.0
+	modernc.org/sqlite v1.63.0
 )
 
 require (
